@@ -125,6 +125,58 @@ func TestTextInputPattern(t *testing.T) {
 	}
 }
 
+func TestFooterPatternNewEntries(t *testing.T) {
+	tests := []struct {
+		input string
+		match bool
+	}{
+		{"Enter to save · Esc to go back", true},
+		{"Enter to confirm · Esc to exit", true},
+		{"Enter to save", true},
+		{"Enter to confirm", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := footerPattern.MatchString(tt.input)
+			if got != tt.match {
+				t.Errorf("footerPattern.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestConfirmPattern(t *testing.T) {
+	tests := []struct {
+		input string
+		match bool
+	}{
+		{"Enter to save · Esc to go back", true},
+		{"Enter to confirm · Esc to exit", true},
+		{"  Enter to save · Esc to go back  ", true},
+		{"  Enter to confirm · Esc to exit  ", true},
+		{"Enter to select", false},
+		{"Esc to cancel", false},
+		{"just some text", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := confirmPattern.MatchString(tt.input)
+			if got != tt.match {
+				t.Errorf("confirmPattern.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestEnterEmoji(t *testing.T) {
+	if enterEmoji != "✅" {
+		t.Errorf("expected ✅, got %s", enterEmoji)
+	}
+}
+
 func TestNumberEmojis(t *testing.T) {
 	if len(numberEmojis) != 9 {
 		t.Errorf("expected 9 number emojis, got %d", len(numberEmojis))

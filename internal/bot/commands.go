@@ -16,19 +16,48 @@ import (
 var SlashCommands = []*discordgo.ApplicationCommand{
 	{
 		Name:        "claude-now",
-		Description: "Claude tmux 세션의 현재 터미널 상태를 확인합니다",
+		Description: "Show current terminal output of the Claude tmux session",
 	},
 	{
 		Name:        "claude-screenshot",
-		Description: "시스템 스크린샷을 찍어서 전송합니다",
+		Description: "Take a system screenshot and send it",
 	},
 	{
 		Name:        "claude-restart",
-		Description: "Claude tmux 세션을 재시작합니다",
+		Description: "Restart the Claude tmux session",
 	},
 	{
 		Name:        "claude-usage",
-		Description: "Claude Code 사용량을 확인합니다",
+		Description: "Check Claude Code usage stats",
+	},
+	{
+		Name:        "claude-export",
+		Description: "Run /export in the Claude tmux session",
+	},
+	{
+		Name:        "claude-model",
+		Description: "Run /model in the Claude tmux session",
+	},
+	{
+		Name:        "claude-login",
+		Description: "Run /login in the Claude tmux session",
+	},
+	{
+		Name:        "claude-logout",
+		Description: "Run /logout in the Claude tmux session",
+	},
+	{
+		Name:        "claude-sendkey",
+		Description: "Send a key or text to the Claude tmux session",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:         discordgo.ApplicationCommandOptionString,
+				Name:         "key",
+				Description:  "Key to send (1-9, Escape, Enter, or any text)",
+				Required:     true,
+				Autocomplete: true,
+			},
+		},
 	},
 }
 
@@ -36,6 +65,19 @@ var SlashCommands = []*discordgo.ApplicationCommand{
 type CommandHandler struct {
 	Tmux      tmux.Config
 	ChannelID string
+}
+
+// SendDelayedNow waits 1 second, then captures and sends the current tmux output.
+func (h *CommandHandler) SendDelayedNow(s *discordgo.Session) {
+	time.Sleep(1 * time.Second)
+	output, err := h.Tmux.CapturePane()
+	if err != nil {
+		return
+	}
+	if output == "" {
+		output = "(empty)"
+	}
+	s.ChannelMessageSend(h.ChannelID, formatCodeBlock(output, 1900))
 }
 
 // HandleNow captures and sends the current tmux pane output.
@@ -77,14 +119,14 @@ func (h *CommandHandler) HandleScreenshot(s *discordgo.Session) {
 // HandleRestart kills the tmux session (LaunchAgent will restart it).
 func (h *CommandHandler) HandleRestart(s *discordgo.Session) {
 	log.Println("[restart] killing tmux session")
-	s.ChannelMessageSend(h.ChannelID, "claude-channel 세션을 재시작합니다...")
+	s.ChannelMessageSend(h.ChannelID, "Restarting claude-channel session...")
 
 	if err := h.Tmux.KillSession(); err != nil {
 		log.Printf("[restart] kill-session failed: %v", err)
-		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("재시작 실패: %v", err))
+		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("Restart failed: %v", err))
 		return
 	}
-	s.ChannelMessageSend(h.ChannelID, "claude-channel 세션 종료 완료. LaunchAgent가 자동으로 재시작합니다.")
+	s.ChannelMessageSend(h.ChannelID, "claude-channel session terminated. LaunchAgent will restart it automatically.")
 }
 
 // HandleUsage sends /usage to tmux, captures the output, and sends it.
@@ -92,7 +134,7 @@ func (h *CommandHandler) HandleUsage(s *discordgo.Session) {
 	log.Println("[usage] sending /usage to tmux")
 
 	if err := h.Tmux.SendText("/usage"); err != nil {
-		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("usage 명령 전송 실패: %v", err))
+		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("Failed to send usage command: %v", err))
 		return
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -153,11 +195,11 @@ func (h *CommandHandler) HandleScreenshotSlash(s *discordgo.Session, i *discordg
 func (h *CommandHandler) HandleRestartSlash(s *discordgo.Session, i *discordgo.Interaction) {
 	log.Println("[slash-restart] killing tmux session")
 	if err := h.Tmux.KillSession(); err != nil {
-		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("재시작 실패: %v", err))})
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Restart failed: %v", err))})
 		return
 	}
 	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
-		Content: strPtr("claude-channel 세션 종료 완료. LaunchAgent가 자동으로 재시작합니다."),
+		Content: strPtr("claude-channel session terminated. LaunchAgent will restart it automatically."),
 	})
 }
 
@@ -166,7 +208,7 @@ func (h *CommandHandler) HandleUsageSlash(s *discordgo.Session, i *discordgo.Int
 	log.Println("[slash-usage] sending /usage to tmux")
 
 	if err := h.Tmux.SendText("/usage"); err != nil {
-		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("usage 전송 실패: %v", err))})
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Failed to send usage command: %v", err))})
 		return
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -175,7 +217,7 @@ func (h *CommandHandler) HandleUsageSlash(s *discordgo.Session, i *discordgo.Int
 
 	output, err := h.Tmux.CapturePane()
 	if err != nil {
-		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("capture 실패: %v", err))})
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Capture failed: %v", err))})
 		return
 	}
 
@@ -188,6 +230,114 @@ func (h *CommandHandler) HandleUsageSlash(s *discordgo.Session, i *discordgo.Int
 		log.Printf("[slash-usage] edit error: %v", err)
 	}
 	log.Println("[slash-usage] sent")
+}
+
+// sendSlashCommand sends a slash command to the tmux session and reports the result.
+func (h *CommandHandler) sendSlashCommand(name string, s *discordgo.Session) {
+	log.Printf("[%s] sending /%s to tmux", name, name)
+	if err := h.Tmux.SendText("/" + name); err != nil {
+		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("Failed to send /%s: %v", name, err))
+		return
+	}
+	time.Sleep(100 * time.Millisecond)
+	h.Tmux.SendKeys("Enter")
+	s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("Sent /%s to Claude session.", name))
+	log.Printf("[%s] sent", name)
+}
+
+// sendSlashCommandSlash is the slash-command variant of sendSlashCommand.
+func (h *CommandHandler) sendSlashCommandSlash(name string, s *discordgo.Session, i *discordgo.Interaction) {
+	log.Printf("[slash-%s] sending /%s to tmux", name, name)
+	if err := h.Tmux.SendText("/" + name); err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Failed to send /%s: %v", name, err))})
+		return
+	}
+	time.Sleep(100 * time.Millisecond)
+	h.Tmux.SendKeys("Enter")
+	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Sent /%s to Claude session.", name))})
+	log.Printf("[slash-%s] sent", name)
+}
+
+func (h *CommandHandler) HandleExport(s *discordgo.Session)      { h.sendSlashCommand("export", s) }
+func (h *CommandHandler) HandleModel(s *discordgo.Session)       { h.sendSlashCommand("model", s) }
+func (h *CommandHandler) HandleLogin(s *discordgo.Session)       { h.sendSlashCommand("login", s) }
+func (h *CommandHandler) HandleLogout(s *discordgo.Session)      { h.sendSlashCommand("logout", s) }
+
+func (h *CommandHandler) HandleExportSlash(s *discordgo.Session, i *discordgo.Interaction) { h.sendSlashCommandSlash("export", s, i) }
+func (h *CommandHandler) HandleModelSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("model", s, i) }
+func (h *CommandHandler) HandleLoginSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("login", s, i) }
+func (h *CommandHandler) HandleLogoutSlash(s *discordgo.Session, i *discordgo.Interaction) { h.sendSlashCommandSlash("logout", s, i) }
+
+// sendkeyChoices are the predefined autocomplete suggestions for /claude-sendkey.
+var sendkeyChoices = []*discordgo.ApplicationCommandOptionChoice{
+	{Name: "1", Value: "1"},
+	{Name: "2", Value: "2"},
+	{Name: "3", Value: "3"},
+	{Name: "4", Value: "4"},
+	{Name: "5", Value: "5"},
+	{Name: "6", Value: "6"},
+	{Name: "7", Value: "7"},
+	{Name: "8", Value: "8"},
+	{Name: "9", Value: "9"},
+	{Name: "Escape", Value: "Escape"},
+	{Name: "Enter", Value: "Enter"},
+	{Name: "Tab", Value: "Tab"},
+	{Name: "Up", Value: "Up"},
+	{Name: "Down", Value: "Down"},
+}
+
+// HandleSendkeyAutocomplete responds with filtered autocomplete suggestions.
+func (h *CommandHandler) HandleSendkeyAutocomplete(s *discordgo.Session, i *discordgo.Interaction) {
+	data := i.ApplicationCommandData()
+	var query string
+	for _, opt := range data.Options {
+		if opt.Name == "key" {
+			query = strings.ToLower(opt.StringValue())
+		}
+	}
+
+	var filtered []*discordgo.ApplicationCommandOptionChoice
+	for _, c := range sendkeyChoices {
+		if query == "" || strings.Contains(strings.ToLower(c.Name), query) {
+			filtered = append(filtered, c)
+		}
+	}
+
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: filtered},
+	})
+}
+
+// HandleSendkeySlash handles the /claude-sendkey slash command.
+func (h *CommandHandler) HandleSendkeySlash(s *discordgo.Session, i *discordgo.Interaction) {
+	data := i.ApplicationCommandData()
+	var key string
+	for _, opt := range data.Options {
+		if opt.Name == "key" {
+			key = opt.StringValue()
+		}
+	}
+
+	log.Printf("[sendkey] key=%q", key)
+
+	switch key {
+	case "Escape", "Enter", "Tab", "Up", "Down":
+		h.Tmux.SendKeys(key)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		h.Tmux.SendKeys(key)
+	default:
+		// Freeform text input
+		if err := h.Tmux.SendText(key); err != nil {
+			s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Failed to send text: %v", err))})
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		h.Tmux.SendKeys("Enter")
+	}
+
+	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Sent key: %s", key))})
+	go h.SendDelayedNow(s)
 }
 
 func strPtr(s string) *string { return &s }

@@ -92,27 +92,7 @@ func (b *Bot) registerHandlers() {
 		log.Printf("[msg] author=%s content=%q", m.Author.Username, m.Content)
 		content := strings.TrimSpace(m.Content)
 
-		// Check if we're waiting for text input
-		if b.state.CheckAndClearTextWait() {
-			log.Printf("[text] received text input: %q", content)
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-
-			b.cfg.Tmux.SendKeys("Tab")
-			time.Sleep(200 * time.Millisecond)
-			if err := b.cfg.Tmux.SendText(content); err != nil {
-				log.Printf("[text] send text failed: %v", err)
-				s.ChannelMessageSend(b.cfg.ChannelID, fmt.Sprintf("텍스트 입력 실패: %v", err))
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-			b.cfg.Tmux.SendKeys("Enter")
-
-			log.Printf("[text] sent text + Enter")
-			s.ChannelMessageSend(b.cfg.ChannelID, fmt.Sprintf("텍스트 입력 완료: %s", content))
-			return
-		}
-
-		// Message-based commands
+		// Message-based commands (non-command messages are handled by claude-channel plugin)
 		switch content {
 		case "/claude-now":
 			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
@@ -126,6 +106,18 @@ func (b *Bot) registerHandlers() {
 		case "/claude-usage":
 			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
 			b.cmd.HandleUsage(s)
+		case "/claude-export":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleExport(s)
+		case "/claude-model":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleModel(s)
+		case "/claude-login":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleLogin(s)
+		case "/claude-logout":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleLogout(s)
 		}
 	})
 
@@ -143,7 +135,17 @@ func (b *Bot) registerHandlers() {
 			log.Println("[choice] user selected Esc (cancel)")
 			b.state.ClearChoice()
 			b.cfg.Tmux.SendKeys("Escape")
-			s.ChannelMessageSend(b.cfg.ChannelID, "Esc 전송 완료 (취소)")
+			s.ChannelMessageSend(b.cfg.ChannelID, "Sent Esc (cancelled)")
+			go b.cmd.SendDelayedNow(s)
+			return
+		}
+
+		if r.Emoji.Name == enterEmoji && b.state.IsConfirm() {
+			log.Println("[choice] user selected Enter (confirm)")
+			b.state.ClearChoice()
+			b.cfg.Tmux.SendKeys("Enter")
+			s.ChannelMessageSend(b.cfg.ChannelID, "Sent Enter (confirmed)")
+			go b.cmd.SendDelayedNow(s)
 			return
 		}
 
@@ -173,13 +175,20 @@ func (b *Bot) registerHandlers() {
 		b.cfg.Tmux.SendKeys("Enter")
 
 		log.Printf("[choice] sent keys for option %d (Down x%d + Enter)", selectedNum, selectedNum-1)
-		s.ChannelMessageSend(b.cfg.ChannelID, fmt.Sprintf("Option %d 선택 완료", selectedNum))
-
+		s.ChannelMessageSend(b.cfg.ChannelID, fmt.Sprintf("Selected option %d", selectedNum))
+		go b.cmd.SendDelayedNow(s)
 		go b.poller.CheckForTextInput()
 	})
 
 	// Slash command interactions
 	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+			if i.ApplicationCommandData().Name == "claude-sendkey" {
+				b.cmd.HandleSendkeyAutocomplete(s, i.Interaction)
+			}
+			return
+		}
+
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
 		}
@@ -210,23 +219,42 @@ func (b *Bot) registerHandlers() {
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
 			go b.cmd.HandleUsageSlash(s, i.Interaction)
+
+		case "claude-export":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleExportSlash(s, i.Interaction)
+
+		case "claude-model":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleModelSlash(s, i.Interaction)
+
+		case "claude-login":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleLoginSlash(s, i.Interaction)
+
+		case "claude-logout":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleLogoutSlash(s, i.Interaction)
+
+		case "claude-sendkey":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleSendkeySlash(s, i.Interaction)
 		}
 	})
 }
 
 func (b *Bot) registerSlashCommands() {
-	// Remove old commands
-	existingCmds, err := b.session.ApplicationCommands(b.session.State.User.ID, b.cfg.GuildID)
-	if err != nil {
-		log.Printf("[slash] failed to list guild commands: %v", err)
-	}
-	for _, cmd := range existingCmds {
-		if err := b.session.ApplicationCommandDelete(b.session.State.User.ID, b.cfg.GuildID, cmd.ID); err != nil {
-			log.Printf("[slash] failed to delete guild command /%s: %v", cmd.Name, err)
-		} else {
-			log.Printf("[slash] removed old guild command: /%s", cmd.Name)
-		}
-	}
+	// Clean up global commands
 	globalCmds, err := b.session.ApplicationCommands(b.session.State.User.ID, "")
 	if err != nil {
 		log.Printf("[slash] failed to list global commands: %v", err)
@@ -239,12 +267,13 @@ func (b *Bot) registerSlashCommands() {
 		}
 	}
 
-	// Register new commands
-	for _, cmd := range SlashCommands {
-		if _, err := b.session.ApplicationCommandCreate(b.session.State.User.ID, b.cfg.GuildID, cmd); err != nil {
-			log.Printf("[slash] failed to register /%s: %v", cmd.Name, err)
-		} else {
-			log.Printf("[slash] registered: /%s", cmd.Name)
-		}
+	// Bulk overwrite guild commands (single API call)
+	registered, err := b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, b.cfg.GuildID, SlashCommands)
+	if err != nil {
+		log.Printf("[slash] bulk overwrite failed: %v", err)
+		return
+	}
+	for _, cmd := range registered {
+		log.Printf("[slash] registered: /%s", cmd.Name)
 	}
 }

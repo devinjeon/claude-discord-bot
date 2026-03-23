@@ -6,48 +6,6 @@ import (
 	"time"
 )
 
-func TestSetWaitingForText(t *testing.T) {
-	s := &InteractionState{}
-	s.SetWaitingForText(true)
-
-	s.mu.Lock()
-	got := s.waitingForText
-	s.mu.Unlock()
-
-	if !got {
-		t.Error("expected waitingForText to be true")
-	}
-
-	s.SetWaitingForText(false)
-	s.mu.Lock()
-	got = s.waitingForText
-	s.mu.Unlock()
-
-	if got {
-		t.Error("expected waitingForText to be false")
-	}
-}
-
-func TestCheckAndClearTextWait(t *testing.T) {
-	s := &InteractionState{}
-
-	// Not waiting: should return false
-	if s.CheckAndClearTextWait() {
-		t.Error("expected false when not waiting")
-	}
-
-	// Set waiting, should return true and clear
-	s.SetWaitingForText(true)
-	if !s.CheckAndClearTextWait() {
-		t.Error("expected true when waiting")
-	}
-
-	// Should be cleared now
-	if s.CheckAndClearTextWait() {
-		t.Error("expected false after clear")
-	}
-}
-
 func TestClearChoice(t *testing.T) {
 	s := &InteractionState{}
 	s.mu.Lock()
@@ -181,21 +139,51 @@ func TestInCooldown(t *testing.T) {
 	}
 }
 
+func TestIsConfirm(t *testing.T) {
+	s := &InteractionState{}
+
+	// Not active, not confirm
+	if s.IsConfirm() {
+		t.Error("expected false when not active")
+	}
+
+	// Active but not confirm
+	s.mu.Lock()
+	s.active = true
+	s.isConfirm = false
+	s.mu.Unlock()
+
+	if s.IsConfirm() {
+		t.Error("expected false when active but not confirm")
+	}
+
+	// Active and confirm
+	s.mu.Lock()
+	s.isConfirm = true
+	s.mu.Unlock()
+
+	if !s.IsConfirm() {
+		t.Error("expected true when active and confirm")
+	}
+
+	// Not active but confirm flag set
+	s.mu.Lock()
+	s.active = false
+	s.isConfirm = true
+	s.mu.Unlock()
+
+	if s.IsConfirm() {
+		t.Error("expected false when not active even if isConfirm is true")
+	}
+}
+
 func TestConcurrentStateAccess(t *testing.T) {
 	s := &InteractionState{}
 	var wg sync.WaitGroup
 
 	// Run multiple goroutines accessing state concurrently
 	for i := 0; i < 100; i++ {
-		wg.Add(4)
-		go func() {
-			defer wg.Done()
-			s.SetWaitingForText(true)
-		}()
-		go func() {
-			defer wg.Done()
-			s.CheckAndClearTextWait()
-		}()
+		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			s.ClearChoice()

@@ -15,10 +15,12 @@ import (
 var numberEmojis = []string{"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"}
 
 const escEmoji = "❌"
+const enterEmoji = "✅"
 
 var (
 	choicePattern    = regexp.MustCompile(`^\s*(?:[^\d\s]\s+)?(\d+)\.\s+(.+)`)
-	footerPattern    = regexp.MustCompile(`Enter to select|to navigate|Esc to cancel`)
+	footerPattern    = regexp.MustCompile(`Enter to select|to navigate|Esc to cancel|Enter to save|Enter to confirm`)
+	confirmPattern   = regexp.MustCompile(`Enter to (save|confirm).*Esc to (go back|exit)`)
 	textInputPattern = regexp.MustCompile(`Tab to amend|Esc to cancel|Enter to submit|Type your|Type a response|submit your`)
 )
 
@@ -92,11 +94,10 @@ func (p *Poller) CheckForTextInput() {
 		return
 	}
 
-	log.Println("[text] text input detected, asking user for input")
-	p.State.SetWaitingForText(true)
+	log.Println("[text] text input detected, notifying user")
 
 	sanitized := strings.ReplaceAll(output, "```", "` ` `")
-	msg := fmt.Sprintf("```\n%s\n```\n텍스트 입력이 필요합니다. 채널에 텍스트를 입력해주세요.", truncate(sanitized, 1850))
+	msg := fmt.Sprintf("```\n%s\n```\nText input required. Use `/claude-sendkey` to send text.", truncate(sanitized, 1850))
 	p.Session.ChannelMessageSend(p.ChannelID, msg)
 }
 
@@ -161,9 +162,12 @@ func (p *Poller) checkForChoicePrompt() {
 
 	sanitized := strings.ReplaceAll(output, "```", "` ` `")
 
+	// Check if this is a confirm prompt (Enter to save · Esc to go back)
+	isConfirm := confirmPattern.MatchString(lines[footerIdx])
+
 	if len(choices) >= 2 {
 		log.Printf("[poll] choice prompt detected: %d options", len(choices))
-		msg := fmt.Sprintf("```\n%s\n```\n선택지가 감지되었습니다. 이모지를 눌러 선택하세요.", truncate(sanitized, 1850))
+		msg := fmt.Sprintf("```\n%s\n```\nSelect an option by reacting with an emoji.", truncate(sanitized, 1850))
 
 		sentMsg, err := p.Session.ChannelMessageSend(p.ChannelID, msg)
 		if err != nil {
@@ -183,9 +187,26 @@ func (p *Poller) checkForChoicePrompt() {
 		p.State.active = true
 		p.State.messageID = sentMsg.ID
 		p.State.numChoices = numChoices
+		p.State.isConfirm = false
+	} else if isConfirm {
+		log.Println("[poll] confirm prompt detected (Enter to save / Esc to go back)")
+		msg := fmt.Sprintf("```\n%s\n```\n✅ Enter (save) · ❌ Esc (go back)", truncate(sanitized, 1850))
+
+		sentMsg, err := p.Session.ChannelMessageSend(p.ChannelID, msg)
+		if err != nil {
+			log.Printf("[poll] failed to send confirm message: %v", err)
+			return
+		}
+		p.Session.MessageReactionAdd(p.ChannelID, sentMsg.ID, enterEmoji)
+		p.Session.MessageReactionAdd(p.ChannelID, sentMsg.ID, escEmoji)
+
+		p.State.active = true
+		p.State.messageID = sentMsg.ID
+		p.State.numChoices = 0
+		p.State.isConfirm = true
 	} else {
 		log.Println("[poll] esc-only prompt detected")
-		msg := fmt.Sprintf("```\n%s\n```\n입력 대기 중입니다. ❌를 눌러 취소할 수 있습니다.", truncate(sanitized, 1850))
+		msg := fmt.Sprintf("```\n%s\n```\nWaiting for input. Press ❌ to cancel.", truncate(sanitized, 1850))
 
 		sentMsg, err := p.Session.ChannelMessageSend(p.ChannelID, msg)
 		if err != nil {
@@ -197,6 +218,7 @@ func (p *Poller) checkForChoicePrompt() {
 		p.State.active = true
 		p.State.messageID = sentMsg.ID
 		p.State.numChoices = 0
+		p.State.isConfirm = false
 	}
 
 	p.State.lastDetectedSig = sig

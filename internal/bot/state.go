@@ -9,31 +9,12 @@ import (
 // InteractionState tracks the current pending choice/text input state.
 type InteractionState struct {
 	mu              sync.Mutex
-	active          bool
-	waitingForText  bool
+	active    bool
+	isConfirm bool
 	messageID       string
 	numChoices      int
 	lastDetectedSig string
 	cooldownUntil   time.Time
-}
-
-// SetWaitingForText atomically sets the waitingForText flag.
-func (s *InteractionState) SetWaitingForText(v bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.waitingForText = v
-}
-
-// CheckAndClearTextWait checks if we're waiting for text, and clears the flag if so.
-// Returns true if we were waiting.
-func (s *InteractionState) CheckAndClearTextWait() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.waitingForText {
-		s.waitingForText = false
-		return true
-	}
-	return false
 }
 
 // ClearChoice resets the active choice state and applies a cooldown.
@@ -72,6 +53,13 @@ func (s *InteractionState) IsActiveMessage(messageID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.active && s.messageID == messageID
+}
+
+// IsConfirm returns true if the current active prompt is a confirm prompt.
+func (s *InteractionState) IsConfirm() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active && s.isConfirm
 }
 
 // InCooldown returns true if we're within a cooldown period.
