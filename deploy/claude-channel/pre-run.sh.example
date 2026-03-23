@@ -1,0 +1,33 @@
+# Pre-run environment setup before launching Claude.
+# Copy this file and customize:
+# cp pre-run.sh.example pre-run.sh
+
+# --- Shell initialization ---
+
+# Source your shell profile so PATH and other settings are available
+# source "$HOME/.zshrc" 2>/dev/null
+# source "$HOME/.bashrc" 2>/dev/null
+# source "$HOME/.bash_profile" 2>/dev/null
+
+# --- Common tools ---
+
+# nvm (Node.js version manager)
+# export NVM_DIR="$HOME/.nvm"
+# [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+
+# pyenv (Python version manager)
+# export PYENV_ROOT="$HOME/.pyenv"
+# export PATH="$PYENV_ROOT/bin:$PATH"
+# eval "$(pyenv init -)"
+
+# Homebrew (non-default location)
+# eval "$(/usr/local/bin/brew shellenv)"
+
+# Rust / Cargo
+# source "$HOME/.cargo/env" 2>/dev/null
+
+# --- Custom environment variables ---
+
+# export ANTHROPIC_API_KEY="sk-..."
+# export NODE_OPTIONS="--max-old-space-size=4096"
+# export PATH="$HOME/.local/bin:$PATH"

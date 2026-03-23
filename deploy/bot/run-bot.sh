@@ -1,9 +1,18 @@
 #!/bin/bash
-SESSION="claude-bot"
-TMUX="/opt/homebrew/bin/tmux"
-BOT="$(cd "$(dirname "$0")/../.." && pwd)/claude-bot"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_SNAPSHOT="$SCRIPT_DIR/../env.generated.sh"
 
-# 기존 세션이 있으면 내부 프로세스까지 확실히 정리
+# Load environment snapshot captured at install time
+if [[ -f "$ENV_SNAPSHOT" ]]; then
+    source "$ENV_SNAPSHOT"
+fi
+
+SESSION="claude-bot"
+TMUX="${INSTALL_TMUX:-$(command -v tmux)}"
+USER_SHELL="${INSTALL_SHELL:-zsh}"
+BOT="$(cd "$SCRIPT_DIR/../.." && pwd)/claude-bot"
+
+# Kill existing session and its child processes
 if "$TMUX" has-session -t "$SESSION" 2>/dev/null; then
     for pid in $("$TMUX" list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null); do
         pkill -TERM -P "$pid" 2>/dev/null
@@ -13,18 +22,18 @@ if "$TMUX" has-session -t "$SESSION" 2>/dev/null; then
     "$TMUX" kill-session -t "$SESSION" 2>/dev/null
 fi
 
-# 새 tmux 세션에서 bot 실행
+# Start bot in a new tmux session
 "$TMUX" new-session -d -s "$SESSION" \
-    "/bin/zsh -c '
+    "/bin/$USER_SHELL -c '
 export HOME=$HOME
-export TERMINAL_EMULATOR=launchd
+# Prevent tmux from blocking nested session creation when $TMUX is already set
 unset TMUX
-source \$HOME/.zshrc 2>/dev/null
-for p in \$(find \$HOME/.rc/ -not -type d | sort); do source \$p 2>/dev/null; done
+PRE_RUN=\"$SCRIPT_DIR/../claude-channel/pre-run.sh\"
+[[ -f \"\$PRE_RUN\" ]] && source \"\$PRE_RUN\"
 exec $BOT
 '"
 
-# 세션이 살아있는 동안 대기 (launchd가 이 스크립트를 감시)
+# Wait while session is alive (launchd monitors this script)
 while "$TMUX" has-session -t "$SESSION" 2>/dev/null; do
     sleep 10
 done

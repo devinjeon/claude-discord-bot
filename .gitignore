@@ -4,3 +4,5 @@ claude-bot
 channel.env
 dist/
 coverage/
+deploy/env.generated.sh
+deploy/claude-channel/pre-run.sh
