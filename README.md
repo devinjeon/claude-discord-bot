@@ -10,9 +10,9 @@ A companion bot for [Claude Channel](https://code.claude.com/docs/en/channels) t
 
 Claude frequently asks you to pick from a numbered list — which file to edit, which test to run, which approach to take. These prompts render in the terminal and wait for a keypress. The Discord plugin has no way to detect or relay them. Without someone watching the terminal, Claude just sits there indefinitely.
 
-### Confirmation dialogs need a physical keypress
+### Permission and confirmation prompts need a physical keypress
 
-"Enter to confirm", "Esc to go back" — Claude pauses and waits. If you're away from the machine, nothing happens. You have to physically walk over and press a key.
+Claude Code asks for permission before running tools, editing files, or executing commands. These prompts show "Enter to confirm" / "Esc to go back" in the terminal and block until someone presses a key. The Discord plugin has no way to relay them. The usual workaround is launching with `--dangerously-skip-permissions`, which bypasses all safety checks — not ideal for unattended sessions where you still want control over what gets approved.
 
 ### The terminal is invisible from Discord
 
@@ -36,8 +36,8 @@ claude-bot runs alongside claude-channel and watches the terminal via tmux. It b
                 Direct chat via Claude Channel
 ```
 
-- Detects selection prompts and sends them to Discord as emoji reactions — tap a number to choose
-- Detects confirmation dialogs and offers Enter/Esc buttons
+- Detects permission and confirmation prompts and forwards them to Discord with Enter/Esc reactions — approve or reject from your phone without `--dangerously-skip-permissions`
+- Detects selection prompts and sends them as numbered emoji reactions — tap to choose
 - Lets you view terminal output, take screenshots, restart sessions, and send arbitrary keystrokes
 - Notifies you when a session restarts
 
