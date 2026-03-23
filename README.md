@@ -47,10 +47,13 @@ claude-bot runs alongside claude-channel and watches the terminal via tmux. It b
 |---------|-------------|
 | `/claude-now` | Show current terminal output |
 | `/claude-screenshot` | Take a screenshot of the desktop and send it |
-| `/claude-restart` | Restart the Claude session (LaunchAgent auto-recovers) |
+| `/claude-restart` | Fully reset and restart the Claude session (LaunchAgent auto-recovers) |
 | `/claude-usage` | Check Claude Code usage stats |
 | `/claude-export` | Run `/export` in the Claude session |
 | `/claude-model` | Run `/model` in the Claude session |
+| `/claude-compact` | Run `/compact` in the Claude session |
+| `/claude-clear` | Run `/clear` in the Claude session |
+| `/claude-skills` | Run `/skills` in the Claude session |
 | `/claude-login` | Run `/login` in the Claude session |
 | `/claude-logout` | Run `/logout` in the Claude session |
 | `/claude-sendkey` | Send a key or text to the terminal (supports autocomplete) |
