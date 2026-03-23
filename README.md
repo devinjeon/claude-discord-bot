@@ -39,6 +39,7 @@ claude-bot runs alongside claude-channel and watches the terminal via tmux. It b
 - Detects permission and confirmation prompts and forwards them to Discord with Enter/Esc reactions — approve or reject from your phone without `--dangerously-skip-permissions`
 - Detects selection prompts and sends them as numbered emoji reactions — tap to choose
 - Lets you view terminal output, take screenshots, restart sessions, and send arbitrary keystrokes
+- Runs as a macOS service with two tmux sessions (`claude-bot` + `claude-channel`) — both start automatically on login, survive reboots, and restart on crash. Once installed, Claude is always reachable from Discord without any manual setup
 - Notifies you when a session restarts
 
 ## Discord commands
