@@ -1,41 +1,45 @@
 # claude-discord-bot
 
-Remotely monitor and control a Claude Code session running on your Mac — entirely from Discord.
+A companion bot for [Claude Channel](https://code.claude.com/docs/en/channels) that adds full terminal monitoring and interactive control to your Discord-based Claude Code workflow.
 
-## Why do you need this?
+## The problem: Claude Channel alone isn't enough
 
-Claude Code's Discord plugin (`claude-channel`) lets you chat with Claude from Discord. But chatting is only half the story. In practice, Claude frequently needs your attention in ways the plugin can't relay:
+[Claude Channel](https://code.claude.com/docs/en/channels) lets you chat with Claude from Discord. But chatting is only half the story.
 
-**Selection prompts get stuck.**
-Claude often asks you to pick from a numbered list — which file to edit, which test to run, which approach to take. These prompts render in the terminal and wait for a keypress. The Discord plugin has no idea they exist. Without someone watching the terminal, Claude just sits there.
+### Selection prompts block silently
 
-**Permission and confirmation dialogs block progress.**
-"Enter to confirm", "Esc to go back" — Claude pauses and waits. If you're away from the machine, nothing happens until you physically walk over and press a key.
+Claude frequently asks you to pick from a numbered list — which file to edit, which test to run, which approach to take. These prompts render in the terminal and wait for a keypress. The Discord plugin has no way to detect or relay them. Without someone watching the terminal, Claude just sits there indefinitely.
 
-**You can't see what Claude is doing.**
-The Discord plugin shows you Claude's chat messages, but not the terminal. You can't see build output, error logs, or what's currently on screen. When Claude goes quiet, you have no way to tell if it's working, waiting, or crashed.
+### Confirmation dialogs need a physical keypress
 
-**You can't intervene remotely.**
-Need to restart a stuck session? Send a slash command like `/usage` or `/model`? Take a screenshot of the desktop? None of this is possible through the chat plugin alone.
+"Enter to confirm", "Esc to go back" — Claude pauses and waits. If you're away from the machine, nothing happens. You have to physically walk over and press a key.
 
-**claude-bot solves all of this.** It watches Claude's terminal session via tmux and bridges the gap:
+### The terminal is invisible from Discord
+
+The Discord plugin relays Claude's chat messages, but not the terminal itself. You can't see build output, error logs, or what's currently on screen. When Claude goes quiet, there's no way to tell if it's working, waiting for input, or crashed.
+
+### No remote control
+
+Need to restart a stuck session? Check usage stats? Take a screenshot? Send a `/model` or `/usage` command? None of this is possible through the chat plugin.
+
+## How claude-bot solves this
+
+claude-bot runs alongside claude-channel and watches the terminal via tmux. It bridges the gap between Discord and everything the chat plugin can't reach.
+
+```
+┌──────────┐      ┌─────────────┐      ┌─────────────────┐
+│ Discord  │◄────►│ claude-bot  │─────►│ claude-channel  │
+│  (you)   │      │  (monitor)  │ tmux │  (Claude Code)  │
+└──────────┘      └─────────────┘      └─────────────────┘
+      ▲                                         │
+      └─────────────────────────────────────────┘
+                Direct chat via Claude Channel
+```
 
 - Detects selection prompts and sends them to Discord as emoji reactions — tap a number to choose
 - Detects confirmation dialogs and offers Enter/Esc buttons
-- Lets you view the current terminal output, take screenshots, restart the session, and send arbitrary keystrokes — all from Discord
+- Lets you view terminal output, take screenshots, restart sessions, and send arbitrary keystrokes
 - Notifies you when a session restarts
-
-```
-┌─────────────┐      ┌─────────────┐      ┌─────────────────┐
-│   Discord    │◄────►│  claude-bot  │─────►│  claude-channel  │
-│   (you)      │      │  (monitor)  │ tmux │  (Claude Code)   │
-└─────────────┘      └─────────────┘      └─────────────────┘
-       ▲                                          │
-       └──────────────────────────────────────────┘
-                   Direct chat via Discord plugin
-```
-
-You talk to Claude through the plugin. claude-bot handles everything the plugin can't.
 
 ## Discord commands
 
@@ -67,16 +71,9 @@ Automatic behaviors:
 
 All must be in your `$PATH` at install time.
 
-### Discord plugin setup
+### Discord channel pairing
 
-Configure the Discord plugin in Claude Code before installing:
-
-| File | Created by | Contents |
-|------|-----------|----------|
-| `~/.claude/channels/discord/.env` | `/discord:configure` skill | `DISCORD_BOT_TOKEN=...` |
-| `~/.claude/channels/discord/access.json` | Channel pairing | Allowed channel IDs, user policies |
-
-You do not need to create these files manually.
+Set up the [Discord channel](https://code.claude.com/docs/en/channels#discord) first. The pairing process creates the bot token and channel configuration automatically. claude-bot reads these files at startup — no additional token or environment variable setup is needed.
 
 ## Install
 
@@ -122,11 +119,11 @@ Sourced inside the tmux session before Claude starts. Use it to set up PATH, loa
 
 ### Bot settings
 
-Read from `~/.claude/channels/discord/.env` or system environment variables:
+Bot token, channel ID, and guild ID are all auto-detected from the Discord channel pairing files. You only need to set these manually if you want to override the defaults:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DISCORD_BOT_TOKEN` | *(required)* | Discord bot token |
+| `DISCORD_BOT_TOKEN` | Auto-detected from pairing | Discord bot token |
 | `DISCORD_CHANNEL_ID` | Auto-detected from `access.json` | Target Discord channel ID |
 | `DISCORD_GUILD_ID` | Auto-detected via Discord API | Discord server (guild) ID |
 | `POLL_INTERVAL` | `5` | Seconds between tmux prompt checks |
