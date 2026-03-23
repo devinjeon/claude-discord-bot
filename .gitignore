@@ -1,0 +1,6 @@
+claude-bot
+*.log
+.env
+channel.env
+dist/
+coverage/
