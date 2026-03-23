@@ -24,7 +24,7 @@ var SlashCommands = []*discordgo.ApplicationCommand{
 	},
 	{
 		Name:        "claude-restart",
-		Description: "Restart the Claude tmux session",
+		Description: "Fully reset and restart the Claude tmux session",
 	},
 	{
 		Name:        "claude-usage",
@@ -45,6 +45,18 @@ var SlashCommands = []*discordgo.ApplicationCommand{
 	{
 		Name:        "claude-logout",
 		Description: "Run /logout in the Claude tmux session",
+	},
+	{
+		Name:        "claude-compact",
+		Description: "Run /compact in the Claude tmux session",
+	},
+	{
+		Name:        "claude-clear",
+		Description: "Run /clear in the Claude tmux session",
+	},
+	{
+		Name:        "claude-skills",
+		Description: "Run /skills in the Claude tmux session",
 	},
 	{
 		Name:        "claude-sendkey",
@@ -262,11 +274,63 @@ func (h *CommandHandler) HandleExport(s *discordgo.Session)      { h.sendSlashCo
 func (h *CommandHandler) HandleModel(s *discordgo.Session)       { h.sendSlashCommand("model", s) }
 func (h *CommandHandler) HandleLogin(s *discordgo.Session)       { h.sendSlashCommand("login", s) }
 func (h *CommandHandler) HandleLogout(s *discordgo.Session)      { h.sendSlashCommand("logout", s) }
+func (h *CommandHandler) HandleCompact(s *discordgo.Session)     { h.sendSlashCommand("compact", s) }
+func (h *CommandHandler) HandleClear(s *discordgo.Session)       { h.sendSlashCommand("clear", s) }
+func (h *CommandHandler) HandleSkills(s *discordgo.Session) {
+	log.Println("[skills] sending /skills to tmux")
 
-func (h *CommandHandler) HandleExportSlash(s *discordgo.Session, i *discordgo.Interaction) { h.sendSlashCommandSlash("export", s, i) }
-func (h *CommandHandler) HandleModelSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("model", s, i) }
-func (h *CommandHandler) HandleLoginSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("login", s, i) }
-func (h *CommandHandler) HandleLogoutSlash(s *discordgo.Session, i *discordgo.Interaction) { h.sendSlashCommandSlash("logout", s, i) }
+	if err := h.Tmux.SendText("/skills"); err != nil {
+		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("Failed to send skills command: %v", err))
+		return
+	}
+	time.Sleep(100 * time.Millisecond)
+	h.Tmux.SendKeys("Enter")
+	time.Sleep(2 * time.Second)
+
+	output, err := h.Tmux.CapturePane()
+	if err != nil {
+		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("tmux capture failed: %v", err))
+		return
+	}
+
+	h.Tmux.SendKeys("Escape")
+
+	s.ChannelMessageSend(h.ChannelID, formatCodeBlock(output, 1900))
+	log.Println("[skills] sent")
+}
+
+func (h *CommandHandler) HandleExportSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("export", s, i) }
+func (h *CommandHandler) HandleModelSlash(s *discordgo.Session, i *discordgo.Interaction)   { h.sendSlashCommandSlash("model", s, i) }
+func (h *CommandHandler) HandleLoginSlash(s *discordgo.Session, i *discordgo.Interaction)   { h.sendSlashCommandSlash("login", s, i) }
+func (h *CommandHandler) HandleLogoutSlash(s *discordgo.Session, i *discordgo.Interaction)  { h.sendSlashCommandSlash("logout", s, i) }
+func (h *CommandHandler) HandleCompactSlash(s *discordgo.Session, i *discordgo.Interaction) { h.sendSlashCommandSlash("compact", s, i) }
+func (h *CommandHandler) HandleClearSlash(s *discordgo.Session, i *discordgo.Interaction)   { h.sendSlashCommandSlash("clear", s, i) }
+func (h *CommandHandler) HandleSkillsSlash(s *discordgo.Session, i *discordgo.Interaction) {
+	log.Println("[slash-skills] sending /skills to tmux")
+
+	if err := h.Tmux.SendText("/skills"); err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Failed to send skills command: %v", err))})
+		return
+	}
+	time.Sleep(100 * time.Millisecond)
+	h.Tmux.SendKeys("Enter")
+	time.Sleep(2 * time.Second)
+
+	output, err := h.Tmux.CapturePane()
+	if err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Capture failed: %v", err))})
+		return
+	}
+
+	h.Tmux.SendKeys("Escape")
+
+	trimmed := strings.ReplaceAll(output, "```", "` ` `")
+	msg := fmt.Sprintf("```\n%s\n```", trimmed)
+	if _, err := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: &msg}); err != nil {
+		log.Printf("[slash-skills] edit error: %v", err)
+	}
+	log.Println("[slash-skills] sent")
+}
 
 // sendkeyChoices are the predefined autocomplete suggestions for /claude-sendkey.
 var sendkeyChoices = []*discordgo.ApplicationCommandOptionChoice{

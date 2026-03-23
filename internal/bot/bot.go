@@ -118,6 +118,15 @@ func (b *Bot) registerHandlers() {
 		case "/claude-logout":
 			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
 			b.cmd.HandleLogout(s)
+		case "/claude-compact":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleCompact(s)
+		case "/claude-clear":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleClear(s)
+		case "/claude-skills":
+			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+			b.cmd.HandleSkills(s)
 		}
 	})
 
@@ -243,6 +252,24 @@ func (b *Bot) registerHandlers() {
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
 			go b.cmd.HandleLogoutSlash(s, i.Interaction)
+
+		case "claude-compact":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleCompactSlash(s, i.Interaction)
+
+		case "claude-clear":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleClearSlash(s, i.Interaction)
+
+		case "claude-skills":
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+			})
+			go b.cmd.HandleSkillsSlash(s, i.Interaction)
 
 		case "claude-sendkey":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
