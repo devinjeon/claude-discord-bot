@@ -1,53 +1,62 @@
 # claude-discord-bot
 
-A system for remotely monitoring and controlling Claude Code tmux sessions via Discord.
+Remotely monitor and control a Claude Code session running on your Mac — entirely from Discord.
 
-## Components
+## Why do you need this?
 
-This project consists of two services:
+Claude Code's Discord plugin (`claude-channel`) lets you chat with Claude from Discord. But chatting is only half the story. In practice, Claude frequently needs your attention in ways the plugin can't relay:
 
-| Service | tmux session | Role |
-|---------|-------------|------|
-| claude-channel | `claude-channel` | Runs Claude Code with the Discord channel plugin |
-| claude-bot | `claude-bot` | Monitors the claude-channel session and relays interactions via Discord |
+**Selection prompts get stuck.**
+Claude often asks you to pick from a numbered list — which file to edit, which test to run, which approach to take. These prompts render in the terminal and wait for a keypress. The Discord plugin has no idea they exist. Without someone watching the terminal, Claude just sits there.
 
-claude-channel is the actual Claude Code agent. claude-bot watches its tmux session and relays situations requiring user intervention (choices, text input) to Discord.
+**Permission and confirmation dialogs block progress.**
+"Enter to confirm", "Esc to go back" — Claude pauses and waits. If you're away from the machine, nothing happens until you physically walk over and press a key.
 
-## Features
+**You can't see what Claude is doing.**
+The Discord plugin shows you Claude's chat messages, but not the terminal. You can't see build output, error logs, or what's currently on screen. When Claude goes quiet, you have no way to tell if it's working, waiting, or crashed.
 
-### Discord commands
-- `/claude-now` — Show current terminal output of the Claude tmux session
-- `/claude-screenshot` — Take a system screenshot and send it
-- `/claude-restart` — Restart the Claude tmux session (LaunchAgent auto-recovers)
-- `/claude-usage` — Check Claude Code usage stats
+**You can't intervene remotely.**
+Need to restart a stuck session? Send a slash command like `/usage` or `/model`? Take a screenshot of the desktop? None of this is possible through the chat plugin alone.
 
-### Automatic features
-- Choice detection — When a selection prompt appears in tmux, it sends emoji buttons to Discord
-- Text input relay — When Claude requests text input, you can type it via Discord message
-- Restart notification — Automatically notifies Discord when a Claude session starts (SessionStart hook)
+**claude-bot solves all of this.** It watches Claude's terminal session via tmux and bridges the gap:
 
-## How it works
+- Detects selection prompts and sends them to Discord as emoji reactions — tap a number to choose
+- Detects confirmation dialogs and offers Enter/Esc buttons
+- Lets you view the current terminal output, take screenshots, restart the session, and send arbitrary keystrokes — all from Discord
+- Notifies you when a session restarts
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────────┐
 │   Discord    │◄────►│  claude-bot  │─────►│  claude-channel  │
-│   (user)     │      │  (Go bot)   │ tmux │  (Claude Code)   │
+│   (you)      │      │  (monitor)  │ tmux │  (Claude Code)   │
 └─────────────┘      └─────────────┘      └─────────────────┘
        ▲                                          │
        └──────────────────────────────────────────┘
                    Direct chat via Discord plugin
 ```
 
-1. `run-channel.sh` runs Claude Code with Discord plugin in a tmux session
-2. `run-bot.sh` runs the Go bot in a separate tmux session
-3. The bot polls the claude-channel session for selection prompts (default: every 5 seconds)
-4. Detected choices are sent to the Discord channel with emoji reactions
-5. When the user clicks an emoji, the corresponding selection is sent as key input to tmux
-6. Both processes are managed by macOS LaunchAgent for automatic start/restart
+You talk to Claude through the plugin. claude-bot handles everything the plugin can't.
+
+## Discord commands
+
+| Command | What it does |
+|---------|-------------|
+| `/claude-now` | Show current terminal output |
+| `/claude-screenshot` | Take a screenshot of the desktop and send it |
+| `/claude-restart` | Restart the Claude session (LaunchAgent auto-recovers) |
+| `/claude-usage` | Check Claude Code usage stats |
+| `/claude-export` | Run `/export` in the Claude session |
+| `/claude-model` | Run `/model` in the Claude session |
+| `/claude-login` | Run `/login` in the Claude session |
+| `/claude-logout` | Run `/logout` in the Claude session |
+| `/claude-sendkey` | Send a key or text to the terminal (supports autocomplete) |
+
+Automatic behaviors:
+- Selection prompts are detected and forwarded with emoji reactions (1-9 + Esc)
+- Confirmation prompts show Enter/Esc buttons
+- Session restarts trigger a Discord notification
 
 ## Prerequisites
-
-### Required software
 
 | Software | Purpose | Install |
 |----------|---------|---------|
@@ -56,19 +65,18 @@ claude-channel is the actual Claude Code agent. claude-bot watches its tmux sess
 | Claude Code | The AI agent | `brew install claude-code` |
 | jq | JSON processing in install script | `brew install jq` |
 
-All of these must be available in your `$PATH` at install time. The installer captures your current shell environment (PATH, SHELL, binary locations) and uses it for the LaunchAgent configuration.
+All must be in your `$PATH` at install time.
 
 ### Discord plugin setup
 
-The Discord plugin (`plugin:discord`) must be configured in Claude Code before installing this bot.
-The plugin creates the following files automatically, which claude-bot reads at startup:
+Configure the Discord plugin in Claude Code before installing:
 
-| File | Created when | Contents |
-|------|-------------|----------|
-| `~/.claude/channels/discord/.env` | Running `/discord:configure` and entering bot token | `DISCORD_BOT_TOKEN=...` |
-| `~/.claude/channels/discord/access.json` | Pairing a channel | Allowed channel IDs, user policies, etc. |
+| File | Created by | Contents |
+|------|-----------|----------|
+| `~/.claude/channels/discord/.env` | `/discord:configure` skill | `DISCORD_BOT_TOKEN=...` |
+| `~/.claude/channels/discord/access.json` | Channel pairing | Allowed channel IDs, user policies |
 
-You do not need to manually create `.env` or set channel/guild IDs.
+You do not need to create these files manually.
 
 ## Install
 
@@ -76,23 +84,7 @@ You do not need to manually create `.env` or set channel/guild IDs.
 make install
 ```
 
-This runs `deploy/install.sh`, which performs the following steps:
-
-1. Verify prerequisites (go, tmux, claude, jq in PATH)
-2. Capture current shell environment (HOME, SHELL, PATH, binary paths) into `deploy/env.generated.sh`
-3. Build the `claude-bot` Go binary
-4. Stop existing services if running
-5. Generate LaunchAgent plist files with the captured PATH
-6. Install Claude Code SessionStart hook — when the Claude session starts, `discord-restart-notify.sh` sends a notification to the Discord channel so you know the session is back up
-7. Load LaunchAgents
-
-The install is idempotent — running it again updates everything cleanly.
-
-After installing, apply changes by reinstalling:
-
-```bash
-make install
-```
+This captures your shell environment, builds the bot, sets up LaunchAgents, and installs a SessionStart hook for restart notifications. The install is idempotent.
 
 ## Uninstall
 
@@ -100,35 +92,23 @@ make install
 make uninstall
 ```
 
-This runs `deploy/uninstall.sh`, which:
-
-1. Stops and removes LaunchAgents
-2. Kills tmux sessions (`claude-bot`, `claude-channel`)
-3. Removes the SessionStart hook from `~/.claude/settings.json`
-
-The uninstall is also idempotent.
+Stops services, removes LaunchAgents, and cleans up the SessionStart hook.
 
 ## Configuration
 
-There are three customization files, none of which are tracked by git:
+Three customization files (none tracked by git):
 
-| File | Purpose | Created by |
-|------|---------|------------|
-| `deploy/claude-channel/channel.env` | Claude CLI flags and channel settings | User (copy from `channel.env.example`) |
-| `deploy/claude-channel/pre-run.sh` | Shell environment setup before Claude starts | User (copy from `pre-run.sh.example`) |
-| `deploy/env.generated.sh` | Captured shell environment at install time | `install.sh` (auto-generated, do not edit) |
+| File | Purpose | How to create |
+|------|---------|--------------|
+| `deploy/claude-channel/channel.env` | Claude CLI flags and channel settings | `cp deploy/claude-channel/channel.env.example deploy/claude-channel/channel.env` |
+| `deploy/claude-channel/pre-run.sh` | Shell environment setup sourced before Claude starts | `cp deploy/claude-channel/pre-run.sh.example deploy/claude-channel/pre-run.sh` |
+| `deploy/env.generated.sh` | Shell environment snapshot | Auto-generated by `install.sh` — do not edit |
 
-After editing any config file, run `make install` to apply.
+After editing any config, run `make install` to apply.
 
-### channel.env — Claude CLI options
+### channel.env
 
-Controls how Claude Code is launched. Create it from the example:
-
-```bash
-cp deploy/claude-channel/channel.env.example deploy/claude-channel/channel.env
-```
-
-Available variables:
+Controls how Claude Code is launched.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -136,136 +116,17 @@ Available variables:
 | `CLAUDE_FLAGS` | *(empty)* | CLI flags passed to `claude` (e.g. `--debug`, `--dangerously-skip-permissions`) |
 | `CLAUDE_EXTRA_ARGS` | *(empty)* | Additional arguments appended after `CLAUDE_FLAGS` |
 
-Examples:
+### pre-run.sh
 
-```bash
-# Enable debug logging
-CLAUDE_FLAGS="--debug"
+Sourced inside the tmux session before Claude starts. Use it to set up PATH, load version managers (nvm, pyenv, etc.), or source your shell profile. See `pre-run.sh.example` for examples.
 
-# Enable debug + skip permission prompts (use with caution)
-CLAUDE_FLAGS="--debug --dangerously-skip-permissions"
+### Bot settings
 
-# Use a different Discord plugin channel
-CLAUDE_CHANNELS="plugin:discord@my-custom-plugin"
-
-# Pass extra arguments
-CLAUDE_EXTRA_ARGS="--verbose"
-```
-
-### pre-run.sh — Runtime environment
-
-Sourced inside the tmux session before Claude starts. Both `claude-channel` and `claude-bot` sessions source this file. Optional — if the file doesn't exist, it is skipped.
-
-Create it from the example:
-
-```bash
-cp deploy/claude-channel/pre-run.sh.example deploy/claude-channel/pre-run.sh
-```
-
-Example:
-
-```bash
-source "$HOME/.zshrc" 2>/dev/null
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-See `pre-run.sh.example` for more examples (nvm, pyenv, cargo, etc.).
-
-### Bot settings via environment variables
-
-These are read from `~/.claude/channels/discord/.env` or system environment variables:
+Read from `~/.claude/channels/discord/.env` or system environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DISCORD_BOT_TOKEN` | *(required)* | Discord bot token |
 | `DISCORD_CHANNEL_ID` | Auto-detected from `access.json` | Target Discord channel ID |
 | `DISCORD_GUILD_ID` | Auto-detected via Discord API | Discord server (guild) ID |
-| `POLL_INTERVAL` | `5` | Polling interval in seconds for checking tmux prompts |
-
-Config resolution order:
-
-| Item | 1st | 2nd | 3rd |
-|------|-----|-----|-----|
-| Bot Token | env var | `.env` | — |
-| Channel ID | env var | `.env` | `access.json` `groups` key |
-| Guild ID | env var | `.env` | Discord API auto-lookup |
-
-To change the polling interval, add to `~/.claude/channels/discord/.env`:
-
-```bash
-echo "POLL_INTERVAL=10" >> ~/.claude/channels/discord/.env
-```
-
-Then restart the bot:
-
-```bash
-make install
-```
-
-## Development
-
-```bash
-# Build only
-make build
-
-# Run directly (requires DISCORD_BOT_TOKEN)
-make run
-
-# Run tests
-make test
-
-# Run tests with race detector
-make test-race
-
-# Test coverage summary
-make coverage
-
-# HTML coverage report
-make coverage-html
-
-# Vet + race tests
-make check
-```
-
-## Project structure
-
-```
-.
-├── cmd/claude-bot/              # Bot entrypoint
-│   └── main.go
-├── internal/
-│   ├── bot/                     # Discord bot core logic
-│   │   ├── bot.go               # Init, handler registration, run
-│   │   ├── commands.go          # Slash/message command handlers
-│   │   ├── polling.go           # tmux choice polling + text input detection
-│   │   └── state.go             # Interaction state management
-│   ├── tmux/                    # tmux operation utilities
-│   │   └── tmux.go
-│   └── imaging/                 # Screenshot + image processing
-│       └── screenshot.go
-├── deploy/
-│   ├── bot/
-│   │   └── run-bot.sh           # Bot launcher script
-│   ├── claude-channel/
-│   │   ├── run-channel.sh       # Claude launcher script
-│   │   ├── pre-run.sh.example   # Pre-run environment template
-│   │   ├── channel.env.example  # Channel config template
-│   │   └── discord-restart-notify.sh
-│   ├── install.sh
-│   └── uninstall.sh
-├── .github/workflows/
-│   └── release.yml              # GoReleaser GitHub Actions
-├── .goreleaser.yml
-├── Makefile
-├── go.mod
-└── go.sum
-```
-
-## Release
-
-Push a tag to trigger GoReleaser via GitHub Actions:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+| `POLL_INTERVAL` | `5` | Seconds between tmux prompt checks |
