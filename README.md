@@ -27,13 +27,11 @@ Need to restart a stuck session? Check usage stats? Take a screenshot? Send a `/
 claude-bot runs alongside claude-channel and watches the terminal via tmux. It bridges the gap between Discord and everything the chat plugin can't reach.
 
 ```
-┌──────────┐      ┌─────────────┐      ┌─────────────────┐
-│ Discord  │◄────►│ claude-bot  │─────►│ claude-channel  │
-│  (you)   │      │  (monitor)  │ tmux │  (Claude Code)  │
-└──────────┘      └─────────────┘      └─────────────────┘
-      ▲                                         │
-      └─────────────────────────────────────────┘
-                Direct chat via Claude Channel
+Discord  <--->  claude-bot  --->  claude-channel
+ (you)          (monitor)   tmux  (Claude Code)
+   ^                                    |
+   +------------------------------------+
+         Direct chat via Claude Channel
 ```
 
 - Detects permission and confirmation prompts and forwards them to Discord with Enter/Esc reactions — approve or reject from your phone without `--dangerously-skip-permissions`
