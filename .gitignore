@@ -7,3 +7,4 @@ coverage/
 deploy/env.generated.sh
 deploy/claude-channel/pre-run.sh
 deploy/instances.conf
+deploy/bot/bot.env

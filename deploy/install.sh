@@ -239,8 +239,22 @@ echo "$INSTANCES_JSON" | python3 -m json.tool > "$DISCORD_CONFIG_DIR/instances.j
 echo "[config] Written: $DISCORD_CONFIG_DIR/instances.json"
 
 # 7. Generate bot LaunchAgent
+#    Read optional bot.env for extra environment variables
+BOT_ENV_ARGS=()
+BOT_ENV_FILE="$SCRIPT_DIR/bot/bot.env"
+if [[ -f "$BOT_ENV_FILE" ]]; then
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    key="$(echo "$key" | xargs)"
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    value="$(echo "$value" | xargs)"
+    BOT_ENV_ARGS+=("$key" "$value")
+    echo "[bot.env] $key=$value"
+  done < "$BOT_ENV_FILE"
+fi
+
 generate_plist "$LABEL_BOT" "$SCRIPT_DIR/bot/run-bot.sh" "claude-bot" \
-  "$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
+  "$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist" \
+  "${BOT_ENV_ARGS[@]+"${BOT_ENV_ARGS[@]}"}"
 echo "[launchd] Generated: $LABEL_BOT"
 
 # 8. Install Claude Code SessionStart hook
