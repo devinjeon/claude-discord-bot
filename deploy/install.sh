@@ -11,7 +11,36 @@ HOOK_DST="$HOME/.claude/hooks/discord-restart-notify.sh"
 SETTINGS="$HOME/.claude/settings.json"
 DISCORD_CONFIG_DIR="$HOME/.claude/channels/discord"
 
+FORCE_RESTART=false
+if [[ "${1:-}" == "--force" ]]; then
+  FORCE_RESTART=true
+fi
+
 echo "=== claude-discord-bot install ==="
+
+# Tracking arrays for selective restart
+RESTART_BOT=false
+RESTART_ALL_CHANNELS=false
+declare -a RESTART_CHANNELS=()
+
+# Helper: md5 checksum (portable macOS/Linux)
+file_md5() {
+  if [[ -f "$1" ]]; then
+    md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'
+  else
+    echo ""
+  fi
+}
+
+# Helper: restart a LaunchAgent only if needed
+restart_service() {
+  local label="$1" plist="$2"
+  if launchctl list "$label" &>/dev/null; then
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  fi
+  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
+  echo "[launchd] Restarted: $label"
+}
 
 # 0. Capture current shell environment
 USER_HOME="$HOME"
@@ -42,13 +71,14 @@ if ! command -v go &>/dev/null; then
   echo "[error] go not found in PATH. Install Go first." >&2
   exit 1
 fi
+BINARY_MD5_BEFORE="$(file_md5 "$PROJECT_DIR/claude-bot")"
 go build -o claude-bot ./cmd/claude-bot
-echo "[build] Done"
-
-# 2. Stop existing bot service
-if launchctl list "$LABEL_BOT" &>/dev/null; then
-  launchctl bootout "gui/$(id -u)/$LABEL_BOT" 2>/dev/null || true
-  echo "[launchd] Stopped: $LABEL_BOT"
+BINARY_MD5_AFTER="$(file_md5 "$PROJECT_DIR/claude-bot")"
+if [[ "$BINARY_MD5_BEFORE" != "$BINARY_MD5_AFTER" ]]; then
+  echo "[build] Binary changed"
+  RESTART_BOT=true
+else
+  echo "[build] Binary unchanged"
 fi
 
 # 3. Set script permissions
@@ -68,6 +98,37 @@ INSTALL_TMUX="$TMUX_PATH"
 INSTALL_CLAUDE="$CLAUDE_PATH"
 EOF
 echo "[env] Saved environment snapshot: $ENV_SNAPSHOT"
+
+# 4b. Check if channel config files changed
+STATE_FILE="$SCRIPT_DIR/.install-state"
+CHANNEL_ENV_FILE="$SCRIPT_DIR/claude-channel/channel.env"
+PRE_RUN_FILE="$SCRIPT_DIR/claude-channel/pre-run.sh"
+CHANNEL_ENV_MD5="$(file_md5 "$CHANNEL_ENV_FILE")"
+PRE_RUN_MD5="$(file_md5 "$PRE_RUN_FILE")"
+ENV_SNAPSHOT_MD5="$(file_md5 "$ENV_SNAPSHOT")"
+
+if [[ -f "$STATE_FILE" ]]; then
+  PREV_CHANNEL_ENV_MD5="$(grep '^CHANNEL_ENV=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  PREV_PRE_RUN_MD5="$(grep '^PRE_RUN=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  PREV_ENV_SNAPSHOT_MD5="$(grep '^ENV_SNAPSHOT=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  if [[ "$CHANNEL_ENV_MD5" != "$PREV_CHANNEL_ENV_MD5" ]]; then
+    echo "[config] channel.env changed"
+    RESTART_ALL_CHANNELS=true
+  fi
+  if [[ "$PRE_RUN_MD5" != "$PREV_PRE_RUN_MD5" ]]; then
+    echo "[config] pre-run.sh changed"
+    RESTART_ALL_CHANNELS=true
+  fi
+  if [[ "$ENV_SNAPSHOT_MD5" != "$PREV_ENV_SNAPSHOT_MD5" ]]; then
+    echo "[config] env.generated.sh changed"
+    RESTART_ALL_CHANNELS=true
+    RESTART_BOT=true
+  fi
+else
+  echo "[config] No previous state found, will restart all"
+  RESTART_ALL_CHANNELS=true
+  RESTART_BOT=true
+fi
 
 # 5. Generate LaunchAgent plist files
 mkdir -p "$USER_HOME/Library/LaunchAgents"
@@ -144,22 +205,25 @@ if [[ -f "$INSTANCES_CONF" ]]; then
     label_channel="com.devin.claude-channel-${instance_name}"
     tmux_session="claude-channel-${instance_name}"
 
-    # Stop existing channel service
-    if launchctl list "$label_channel" &>/dev/null; then
-      launchctl bootout "gui/$(id -u)/$label_channel" 2>/dev/null || true
-      echo "[launchd] Stopped: $label_channel"
-    fi
-
-    # Generate channel LaunchAgent with instance-specific env vars
+    # Generate channel LaunchAgent to temp, compare with existing
+    channel_plist="$USER_HOME/Library/LaunchAgents/$label_channel.plist"
+    channel_plist_tmp="${channel_plist}.tmp"
     generate_plist "$label_channel" \
       "$SCRIPT_DIR/claude-channel/run-channel.sh" \
       "claude-channel-${instance_name}" \
-      "$USER_HOME/Library/LaunchAgents/$label_channel.plist" \
+      "$channel_plist_tmp" \
       "INSTANCE_NAME" "$instance_name" \
       "WORKING_DIR" "$working_dir" \
       "DISCORD_CHANNEL_ID" "$channel_id"
 
-    echo "[launchd] Generated: $label_channel (${instance_name} -> ${working_dir})"
+    if ! diff -q "$channel_plist_tmp" "$channel_plist" &>/dev/null; then
+      echo "[launchd] Plist changed: $label_channel (${instance_name} -> ${working_dir})"
+      mv "$channel_plist_tmp" "$channel_plist"
+      RESTART_CHANNELS+=("$instance_name")
+    else
+      echo "[launchd] Plist unchanged: $label_channel"
+      rm -f "$channel_plist_tmp"
+    fi
 
     # Create per-instance Discord state dir with its own access.json and .env
     state_dir="$HOME/.claude/channels/discord-${instance_name}"
@@ -213,20 +277,22 @@ else
 
   echo "[instances] No instances.conf found, using single-instance mode"
 
-  # Stop existing channel service
-  if launchctl list "$LABEL_CHANNEL" &>/dev/null; then
-    launchctl bootout "gui/$(id -u)/$LABEL_CHANNEL" 2>/dev/null || true
-    echo "[launchd] Stopped: $LABEL_CHANNEL"
-  fi
-
-  # Generate single channel LaunchAgent (no INSTANCE_NAME -> defaults to ~/,
-  # tmux session "claude-channel", state dir ~/.claude/channels/discord/)
+  # Generate single channel LaunchAgent to temp, compare with existing
+  channel_plist="$USER_HOME/Library/LaunchAgents/$LABEL_CHANNEL.plist"
+  channel_plist_tmp="${channel_plist}.tmp"
   generate_plist "$LABEL_CHANNEL" \
     "$SCRIPT_DIR/claude-channel/run-channel.sh" \
     "claude-channel" \
-    "$USER_HOME/Library/LaunchAgents/$LABEL_CHANNEL.plist"
+    "$channel_plist_tmp"
 
-  echo "[launchd] Generated: $LABEL_CHANNEL (default -> ~/)"
+  if ! diff -q "$channel_plist_tmp" "$channel_plist" &>/dev/null; then
+    echo "[launchd] Plist changed: $LABEL_CHANNEL (default -> ~/)"
+    mv "$channel_plist_tmp" "$channel_plist"
+    RESTART_ALL_CHANNELS=true
+  else
+    echo "[launchd] Plist unchanged: $LABEL_CHANNEL"
+    rm -f "$channel_plist_tmp"
+  fi
 fi
 
 INSTANCES_JSON+=']}'
@@ -252,10 +318,20 @@ if [[ -f "$BOT_ENV_FILE" ]]; then
   done < "$BOT_ENV_FILE"
 fi
 
+BOT_PLIST="$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
+BOT_PLIST_TMP="${BOT_PLIST}.tmp"
 generate_plist "$LABEL_BOT" "$SCRIPT_DIR/bot/run-bot.sh" "claude-bot" \
-  "$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist" \
+  "$BOT_PLIST_TMP" \
   "${BOT_ENV_ARGS[@]+"${BOT_ENV_ARGS[@]}"}"
-echo "[launchd] Generated: $LABEL_BOT"
+
+if ! diff -q "$BOT_PLIST_TMP" "$BOT_PLIST" &>/dev/null; then
+  echo "[launchd] Bot plist changed"
+  mv "$BOT_PLIST_TMP" "$BOT_PLIST"
+  RESTART_BOT=true
+else
+  echo "[launchd] Bot plist unchanged"
+  rm -f "$BOT_PLIST_TMP"
+fi
 
 # 8. Install Claude Code SessionStart hook
 mkdir -p "$(dirname "$HOOK_DST")"
@@ -281,8 +357,14 @@ if [[ -f "$SETTINGS" ]]; then
   fi
 fi
 
-# 9. Load all LaunchAgents
-# Load channel instances first
+# 9. Selective restart — only restart services that changed
+if [[ "$FORCE_RESTART" == "true" ]]; then
+  echo "[restart] --force: restarting all services"
+  RESTART_BOT=true
+  RESTART_ALL_CHANNELS=true
+fi
+
+# Restart channel instances
 if [[ "$MULTI_INSTANCE" == "true" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="$(echo "$line" | sed 's/#.*//' | xargs)"
@@ -290,29 +372,57 @@ if [[ "$MULTI_INSTANCE" == "true" ]]; then
     instance_name="$(echo "$line" | awk '{print $1}')"
     label="com.devin.claude-channel-${instance_name}"
     plist="$USER_HOME/Library/LaunchAgents/$label.plist"
-    if launchctl list "$label" &>/dev/null; then
-      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+
+    should_restart=false
+    if [[ "$RESTART_ALL_CHANNELS" == "true" ]]; then
+      should_restart=true
+    else
+      for name in "${RESTART_CHANNELS[@]+"${RESTART_CHANNELS[@]}"}"; do
+        if [[ "$name" == "$instance_name" ]]; then
+          should_restart=true
+          break
+        fi
+      done
     fi
-    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
-    echo "[launchd] Loaded: $label"
+
+    if [[ "$should_restart" == "true" ]]; then
+      restart_service "$label" "$plist"
+    else
+      # Ensure service is running even if no restart needed
+      if ! launchctl list "$label" &>/dev/null; then
+        restart_service "$label" "$plist"
+      else
+        echo "[launchd] No change: $label"
+      fi
+    fi
   done < "$INSTANCES_CONF"
 else
-  # Single-instance mode
   label="com.devin.claude-channel"
   plist="$USER_HOME/Library/LaunchAgents/$label.plist"
-  if launchctl list "$label" &>/dev/null; then
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  if [[ "$RESTART_ALL_CHANNELS" == "true" ]]; then
+    restart_service "$label" "$plist"
+  elif ! launchctl list "$label" &>/dev/null; then
+    restart_service "$label" "$plist"
+  else
+    echo "[launchd] No change: $label"
   fi
-  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
-  echo "[launchd] Loaded: $label"
 fi
 
-# Load bot
-plist="$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
-if launchctl list "$LABEL_BOT" &>/dev/null; then
-  launchctl bootout "gui/$(id -u)/$LABEL_BOT" 2>/dev/null || true
+# Restart bot
+BOT_PLIST_PATH="$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
+if [[ "$RESTART_BOT" == "true" ]]; then
+  restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
+elif ! launchctl list "$LABEL_BOT" &>/dev/null; then
+  restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
+else
+  echo "[launchd] No change: $LABEL_BOT"
 fi
-launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
-echo "[launchd] Loaded: $LABEL_BOT"
+
+# 10. Save state for next run
+cat > "$STATE_FILE" <<STATEFILE
+CHANNEL_ENV=$CHANNEL_ENV_MD5
+PRE_RUN=$PRE_RUN_MD5
+ENV_SNAPSHOT=$(file_md5 "$ENV_SNAPSHOT")
+STATEFILE
 
 echo "=== Install done ==="
