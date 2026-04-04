@@ -21,7 +21,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestFindTmux(t *testing.T) {
-	path := findTmux()
+	path := FindTmux()
 	if path == "" {
 		t.Error("findTmux returned empty string")
 	}

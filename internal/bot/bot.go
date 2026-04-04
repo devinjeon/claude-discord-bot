@@ -10,22 +10,34 @@ import (
 	"github.com/devinjeon/claude-discord-bot/internal/tmux"
 )
 
+// InstanceConfig holds the configuration for a single channel-tmux instance.
+type InstanceConfig struct {
+	Name      string
+	ChannelID string
+	Tmux      tmux.Config
+}
+
 // Config holds the bot configuration.
 type Config struct {
 	Token        string
-	ChannelID    string
 	GuildID      string
-	Tmux         tmux.Config
+	Instances    []InstanceConfig
 	PollInterval time.Duration
+}
+
+// Instance groups the per-channel state, command handler, and poller.
+type Instance struct {
+	Config InstanceConfig
+	State  *InteractionState
+	Cmd    *CommandHandler
+	Poller *Poller
 }
 
 // Bot is the main Discord bot instance.
 type Bot struct {
-	cfg     Config
-	session *discordgo.Session
-	state   *InteractionState
-	cmd     *CommandHandler
-	poller  *Poller
+	cfg       Config
+	session   *discordgo.Session
+	instances map[string]*Instance // channelID -> Instance
 }
 
 // New creates a new Bot instance.
@@ -35,25 +47,32 @@ func New(cfg Config) (*Bot, error) {
 		return nil, fmt.Errorf("create discord session: %w", err)
 	}
 
-	state := &InteractionState{}
-	cmd := &CommandHandler{
-		Tmux:      cfg.Tmux,
-		ChannelID: cfg.ChannelID,
-	}
-
 	b := &Bot{
-		cfg:     cfg,
-		session: dg,
-		state:   state,
-		cmd:     cmd,
+		cfg:       cfg,
+		session:   dg,
+		instances: make(map[string]*Instance),
 	}
 
-	b.poller = &Poller{
-		Session:   dg,
-		Tmux:      cfg.Tmux,
-		State:     state,
-		ChannelID: cfg.ChannelID,
-		Interval:  cfg.PollInterval,
+	for _, ic := range cfg.Instances {
+		state := &InteractionState{}
+		cmd := &CommandHandler{
+			Tmux:      ic.Tmux,
+			ChannelID: ic.ChannelID,
+		}
+		poller := &Poller{
+			Session:   dg,
+			Tmux:      ic.Tmux,
+			State:     state,
+			ChannelID: ic.ChannelID,
+			Interval:  cfg.PollInterval,
+		}
+		b.instances[ic.ChannelID] = &Instance{
+			Config: ic,
+			State:  state,
+			Cmd:    cmd,
+			Poller: poller,
+		}
+		log.Printf("[init] instance %q -> channel %s -> tmux %s", ic.Name, ic.ChannelID, ic.Tmux.Session)
 	}
 
 	b.registerHandlers()
@@ -73,88 +92,103 @@ func (b *Bot) Run(done <-chan struct{}) error {
 
 	b.registerSlashCommands()
 
-	log.Printf("claude-bot running (channel: %s)", b.cfg.ChannelID)
+	log.Printf("claude-bot running (%d instances)", len(b.instances))
 
-	go b.poller.Run(done)
+	for _, inst := range b.instances {
+		go inst.Poller.Run(done)
+	}
 
 	<-done
 	log.Println("Shutting down")
 	return nil
 }
 
+func (b *Bot) getInstance(channelID string) *Instance {
+	return b.instances[channelID]
+}
+
 func (b *Bot) registerHandlers() {
 	// Text messages
 	b.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		if m.Author.ID == s.State.User.ID || m.ChannelID != b.cfg.ChannelID {
+		if m.Author.ID == s.State.User.ID {
 			return
 		}
 
-		log.Printf("[msg] author=%s content=%q", m.Author.Username, m.Content)
+		inst := b.getInstance(m.ChannelID)
+		if inst == nil {
+			return
+		}
+
+		log.Printf("[msg] channel=%s instance=%s author=%s content=%q", m.ChannelID, inst.Config.Name, m.Author.Username, m.Content)
 		content := strings.TrimSpace(m.Content)
 
-		// Message-based commands (non-command messages are handled by claude-channel plugin)
 		switch content {
 		case "/claude-now":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleNow(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleNow(s)
 		case "/claude-screenshot":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleScreenshot(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleScreenshot(s)
 		case "/claude-restart":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleRestart(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleRestart(s)
 		case "/claude-usage":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleUsage(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleUsage(s)
 		case "/claude-export":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleExport(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleExport(s)
 		case "/claude-model":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleModel(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleModel(s)
 		case "/claude-login":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleLogin(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleLogin(s)
 		case "/claude-logout":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleLogout(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleLogout(s)
 		case "/claude-compact":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleCompact(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleCompact(s)
 		case "/claude-clear":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleClear(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleClear(s)
 		case "/claude-skills":
-			s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-			b.cmd.HandleSkills(s)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "\u2705")
+			inst.Cmd.HandleSkills(s)
 		}
 	})
 
 	// Emoji reactions for choice selection
 	b.session.AddHandler(func(s *discordgo.Session, r *discordgo.MessageReactionAdd) {
-		if r.UserID == s.State.User.ID || r.ChannelID != b.cfg.ChannelID {
+		if r.UserID == s.State.User.ID {
 			return
 		}
 
-		if !b.state.IsActiveMessage(r.MessageID) {
+		inst := b.getInstance(r.ChannelID)
+		if inst == nil {
+			return
+		}
+
+		if !inst.State.IsActiveMessage(r.MessageID) {
 			return
 		}
 
 		if r.Emoji.Name == escEmoji {
-			log.Println("[choice] user selected Esc (cancel)")
-			b.state.ClearChoice()
-			b.cfg.Tmux.SendKeys("Escape")
-			s.ChannelMessageSend(b.cfg.ChannelID, "Sent Esc (cancelled)")
-			go b.cmd.SendDelayedNow(s)
+			log.Printf("[choice] instance=%s user selected Esc (cancel)", inst.Config.Name)
+			inst.State.ClearChoice()
+			inst.Config.Tmux.SendKeys("Escape")
+			s.ChannelMessageSend(inst.Config.ChannelID, "Sent Esc (cancelled)")
+			go inst.Cmd.SendDelayedNow(s)
 			return
 		}
 
-		if r.Emoji.Name == enterEmoji && b.state.IsConfirm() {
-			log.Println("[choice] user selected Enter (confirm)")
-			b.state.ClearChoice()
-			b.cfg.Tmux.SendKeys("Enter")
-			s.ChannelMessageSend(b.cfg.ChannelID, "Sent Enter (confirmed)")
-			go b.cmd.SendDelayedNow(s)
+		if r.Emoji.Name == enterEmoji && inst.State.IsConfirm() {
+			log.Printf("[choice] instance=%s user selected Enter (confirm)", inst.Config.Name)
+			inst.State.ClearChoice()
+			inst.Config.Tmux.SendKeys("Enter")
+			s.ChannelMessageSend(inst.Config.ChannelID, "Sent Enter (confirmed)")
+			go inst.Cmd.SendDelayedNow(s)
 			return
 		}
 
@@ -166,34 +200,39 @@ func (b *Bot) registerHandlers() {
 			}
 		}
 
-		b.state.mu.Lock()
-		numChoices := b.state.numChoices
-		b.state.mu.Unlock()
+		inst.State.mu.Lock()
+		numChoices := inst.State.numChoices
+		inst.State.mu.Unlock()
 
 		if selectedNum < 1 || selectedNum > numChoices {
 			return
 		}
 
-		log.Printf("[choice] user selected option %d", selectedNum)
-		b.state.ClearChoice()
+		log.Printf("[choice] instance=%s user selected option %d", inst.Config.Name, selectedNum)
+		inst.State.ClearChoice()
 
 		for i := 1; i < selectedNum; i++ {
-			b.cfg.Tmux.SendKeys("Down")
+			inst.Config.Tmux.SendKeys("Down")
 			time.Sleep(100 * time.Millisecond)
 		}
-		b.cfg.Tmux.SendKeys("Enter")
+		inst.Config.Tmux.SendKeys("Enter")
 
-		log.Printf("[choice] sent keys for option %d (Down x%d + Enter)", selectedNum, selectedNum-1)
-		s.ChannelMessageSend(b.cfg.ChannelID, fmt.Sprintf("Selected option %d", selectedNum))
-		go b.cmd.SendDelayedNow(s)
-		go b.poller.CheckForTextInput()
+		log.Printf("[choice] instance=%s sent keys for option %d (Down x%d + Enter)", inst.Config.Name, selectedNum, selectedNum-1)
+		s.ChannelMessageSend(inst.Config.ChannelID, fmt.Sprintf("Selected option %d", selectedNum))
+		go inst.Cmd.SendDelayedNow(s)
+		go inst.Poller.CheckForTextInput()
 	})
 
 	// Slash command interactions
 	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+			// Autocomplete doesn't need instance routing — just respond with choices
 			if i.ApplicationCommandData().Name == "claude-sendkey" {
-				b.cmd.HandleSendkeyAutocomplete(s, i.Interaction)
+				// Use any instance's handler (autocomplete is static)
+				for _, inst := range b.instances {
+					inst.Cmd.HandleSendkeyAutocomplete(s, i.Interaction)
+					return
+				}
 			}
 			return
 		}
@@ -202,80 +241,91 @@ func (b *Bot) registerHandlers() {
 			return
 		}
 
-		log.Printf("[slash] command=%s", i.ApplicationCommandData().Name)
+		inst := b.getInstance(i.ChannelID)
+		if inst == nil {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "This channel is not linked to a Claude instance.",
+				},
+			})
+			return
+		}
+
+		log.Printf("[slash] instance=%s command=%s", inst.Config.Name, i.ApplicationCommandData().Name)
 
 		switch i.ApplicationCommandData().Name {
 		case "claude-now":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			b.cmd.HandleNowSlash(s, i.Interaction)
+			inst.Cmd.HandleNowSlash(s, i.Interaction)
 
 		case "claude-screenshot":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleScreenshotSlash(s, i.Interaction)
+			go inst.Cmd.HandleScreenshotSlash(s, i.Interaction)
 
 		case "claude-restart":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleRestartSlash(s, i.Interaction)
+			go inst.Cmd.HandleRestartSlash(s, i.Interaction)
 
 		case "claude-usage":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleUsageSlash(s, i.Interaction)
+			go inst.Cmd.HandleUsageSlash(s, i.Interaction)
 
 		case "claude-export":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleExportSlash(s, i.Interaction)
+			go inst.Cmd.HandleExportSlash(s, i.Interaction)
 
 		case "claude-model":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleModelSlash(s, i.Interaction)
+			go inst.Cmd.HandleModelSlash(s, i.Interaction)
 
 		case "claude-login":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleLoginSlash(s, i.Interaction)
+			go inst.Cmd.HandleLoginSlash(s, i.Interaction)
 
 		case "claude-logout":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleLogoutSlash(s, i.Interaction)
+			go inst.Cmd.HandleLogoutSlash(s, i.Interaction)
 
 		case "claude-compact":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleCompactSlash(s, i.Interaction)
+			go inst.Cmd.HandleCompactSlash(s, i.Interaction)
 
 		case "claude-clear":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleClearSlash(s, i.Interaction)
+			go inst.Cmd.HandleClearSlash(s, i.Interaction)
 
 		case "claude-skills":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleSkillsSlash(s, i.Interaction)
+			go inst.Cmd.HandleSkillsSlash(s, i.Interaction)
 
 		case "claude-sendkey":
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 			})
-			go b.cmd.HandleSendkeySlash(s, i.Interaction)
+			go inst.Cmd.HandleSendkeySlash(s, i.Interaction)
 		}
 	})
 }

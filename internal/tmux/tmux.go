@@ -20,7 +20,7 @@ type Config struct {
 // DefaultConfig returns the default tmux configuration.
 // It searches PATH for tmux rather than hardcoding a specific location.
 func DefaultConfig() Config {
-	path := findTmux()
+	path := FindTmux()
 	return Config{
 		Path:    path,
 		Session: "claude-channel",
@@ -28,8 +28,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// findTmux locates the tmux binary using PATH lookup.
-func findTmux() string {
+// FindTmux locates the tmux binary using PATH lookup.
+func FindTmux() string {
 	if p, err := exec.LookPath("tmux"); err == nil {
 		return p
 	}
