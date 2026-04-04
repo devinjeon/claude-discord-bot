@@ -2,29 +2,21 @@
 
 A companion bot for [Claude Channel](https://code.claude.com/docs/en/channels) that adds full terminal monitoring and interactive control to your Discord-based Claude Code workflow.
 
-## The problem: Claude Channel alone isn't enough
+## What claude-bot adds to Claude Channel
 
-[Claude Channel](https://code.claude.com/docs/en/channels) lets you chat with Claude from Discord. But chatting is only half the story.
+claude-bot fills in what [Claude Channel](https://code.claude.com/docs/en/channels) doesn't cover.
 
-### Selection prompts block silently
+### In-channel prompt interaction
 
-Claude frequently asks you to pick from a numbered list — which file to edit, which test to run, which approach to take. These prompts render in the terminal and wait for a keypress. The Discord plugin has no way to detect or relay them. Without someone watching the terminal, Claude just sits there indefinitely.
+Claude Channel handles prompts via DM buttons. claude-bot surfaces them as in-channel emoji reactions instead — selection prompts become numbered reactions, permission prompts get Enter/Esc. No DM switching needed.
 
-### Permission and confirmation prompts need a physical keypress
+### Terminal visibility
 
-Claude Code asks for permission before running tools, editing files, or executing commands. These prompts show "Enter to confirm" / "Esc to go back" in the terminal and block until someone presses a key. The Discord plugin has no way to relay them. The usual workaround is launching with `--dangerously-skip-permissions`, which bypasses all safety checks — not ideal for unattended sessions where you still want control over what gets approved.
+Claude Channel only relays chat messages. Build output, error logs, and the current screen are invisible. When Claude goes silent, there's no way to tell if it's working, stuck on a prompt, or crashed. claude-bot lets you check the terminal (`/claude-now`) and take screenshots (`/claude-screenshot`) directly from Discord.
 
-### The terminal is invisible from Discord
+### Session management
 
-The Discord plugin relays Claude's chat messages, but not the terminal itself. You can't see build output, error logs, or what's currently on screen. When Claude goes quiet, there's no way to tell if it's working, waiting for input, or crashed.
-
-### No remote control
-
-Need to restart a stuck session? Check usage stats? Take a screenshot? Send a `/model` or `/usage` command? None of this is possible through the chat plugin.
-
-## How claude-bot solves this
-
-claude-bot runs alongside claude-channel and watches the terminal via tmux. It bridges the gap between Discord and everything the chat plugin can't reach.
+Claude Channel doesn't manage the Claude Code process — crashes, hangs, and reboots require manual recovery. claude-bot runs as a macOS LaunchAgent daemon that auto-starts on login and auto-restarts on crash. You can restart, send slash commands (`/model`, `/usage`, `/compact`), and send keystrokes remotely via Discord.
 
 ```
 Single-channel mode:
@@ -43,13 +35,6 @@ Multi-channel mode:
         \               /
          claude-bot (1 process, routes by channel ID)
 ```
-
-- Runs multiple Claude sessions, each in its own working directory, each linked to a separate Discord channel -- one bot process routes all commands
-- Detects permission and confirmation prompts and forwards them to Discord with Enter/Esc reactions -- approve or reject from your phone without `--dangerously-skip-permissions`
-- Detects selection prompts and sends them as numbered emoji reactions -- tap to choose
-- Lets you view terminal output, take screenshots, restart sessions, and send arbitrary keystrokes
-- Runs as a macOS service via LaunchAgents -- starts on login, survives reboots, auto-restarts on crash
-- Notifies the correct channel when a session restarts
 
 ## Discord commands
 
