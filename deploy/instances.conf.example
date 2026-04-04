@@ -1,0 +1,24 @@
+# Instance configuration for multi-channel Claude Discord bot.
+# Copy this file to instances.conf and fill in your Discord channel IDs.
+#
+# Format: instance_name  channel_id  working_directory
+#
+# - instance_name: used for tmux session name (claude-channel-<name>) and LaunchAgent label
+#   Naming convention: use the directory path relative to ~, replacing / with -
+#   (Discord channel names cannot contain / and -- is not allowed)
+# - channel_id: Discord channel snowflake ID
+# - working_directory: path where Claude Code runs (~ is expanded at install time)
+#
+# Each instance gets:
+#   - Its own tmux session: claude-channel-<instance_name>
+#   - Its own LaunchAgent: com.devin.claude-channel-<instance_name>
+#   - Its own Discord state dir: ~/.claude/channels/discord-<instance_name>/
+#     (with a per-instance access.json so it only listens to its channel)
+#
+# The bot process (single instance) routes commands to the correct tmux session
+# based on which Discord channel the command was sent from.
+#
+# Example:
+# home                1234567890123456789  ~/
+# my-project          1234567890123456790  ~/my-project
+# another-project     1234567890123456791  ~/another-project

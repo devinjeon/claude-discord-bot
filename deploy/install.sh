@@ -5,10 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 LABEL_BOT="com.devin.claude-bot"
-LABEL_CHANNEL="com.devin.claude-channel"
+INSTANCES_CONF="$SCRIPT_DIR/instances.conf"
 HOOK_SRC="$SCRIPT_DIR/claude-channel/discord-restart-notify.sh"
 HOOK_DST="$HOME/.claude/hooks/discord-restart-notify.sh"
 SETTINGS="$HOME/.claude/settings.json"
+DISCORD_CONFIG_DIR="$HOME/.claude/channels/discord"
 
 echo "=== claude-discord-bot install ==="
 
@@ -44,13 +45,11 @@ fi
 go build -o claude-bot ./cmd/claude-bot
 echo "[build] Done"
 
-# 2. Stop existing services
-for label in "$LABEL_BOT" "$LABEL_CHANNEL"; do
-  if launchctl list "$label" &>/dev/null; then
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-    echo "[launchd] Stopped: $label"
-  fi
-done
+# 2. Stop existing bot service
+if launchctl list "$LABEL_BOT" &>/dev/null; then
+  launchctl bootout "gui/$(id -u)/$LABEL_BOT" 2>/dev/null || true
+  echo "[launchd] Stopped: $LABEL_BOT"
+fi
 
 # 3. Set script permissions
 chmod +x "$SCRIPT_DIR/bot/run-bot.sh"
@@ -70,11 +69,21 @@ INSTALL_CLAUDE="$CLAUDE_PATH"
 EOF
 echo "[env] Saved environment snapshot: $ENV_SNAPSHOT"
 
-# 5. Generate LaunchAgent plist files (inject PATH from install time)
+# 5. Generate LaunchAgent plist files
 mkdir -p "$USER_HOME/Library/LaunchAgents"
 
 generate_plist() {
   local label="$1" script="$2" log_name="$3" dest="$4"
+  shift 4
+  # Remaining args are key-value pairs for EnvironmentVariables
+  local env_vars=""
+  while [[ $# -ge 2 ]]; do
+    env_vars+="        <key>$1</key>
+        <string>$2</string>
+"
+    shift 2
+  done
+
   cat > "$dest" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -105,19 +114,136 @@ generate_plist() {
         <string>${USER_PATH}</string>
         <key>HOME</key>
         <string>${USER_HOME}</string>
-    </dict>
+${env_vars}    </dict>
 </dict>
 </plist>
 PLIST
 }
 
+# 6. Parse instances.conf and generate per-instance LaunchAgents + instances.json
+INSTANCES_JSON='{"instances":['
+FIRST_INSTANCE=true
+
+if [[ -f "$INSTANCES_CONF" ]]; then
+  MULTI_INSTANCE=true
+  echo "[instances] Reading $INSTANCES_CONF"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip comments and empty lines
+    line="$(echo "$line" | sed 's/#.*//' | xargs)"
+    [[ -z "$line" ]] && continue
+
+    # Parse: instance_name channel_id working_directory
+    instance_name="$(echo "$line" | awk '{print $1}')"
+    channel_id="$(echo "$line" | awk '{print $2}')"
+    working_dir="$(echo "$line" | awk '{print $3}')"
+
+    # Expand ~
+    working_dir="${working_dir/#\~/$USER_HOME}"
+
+    label_channel="com.devin.claude-channel-${instance_name}"
+    tmux_session="claude-channel-${instance_name}"
+
+    # Stop existing channel service
+    if launchctl list "$label_channel" &>/dev/null; then
+      launchctl bootout "gui/$(id -u)/$label_channel" 2>/dev/null || true
+      echo "[launchd] Stopped: $label_channel"
+    fi
+
+    # Generate channel LaunchAgent with instance-specific env vars
+    generate_plist "$label_channel" \
+      "$SCRIPT_DIR/claude-channel/run-channel.sh" \
+      "claude-channel-${instance_name}" \
+      "$USER_HOME/Library/LaunchAgents/$label_channel.plist" \
+      "INSTANCE_NAME" "$instance_name" \
+      "WORKING_DIR" "$working_dir" \
+      "DISCORD_CHANNEL_ID" "$channel_id"
+
+    echo "[launchd] Generated: $label_channel (${instance_name} -> ${working_dir})"
+
+    # Create per-instance Discord state dir with its own access.json and .env
+    state_dir="$HOME/.claude/channels/discord-${instance_name}"
+    mkdir -p "$state_dir"
+
+    # Copy bot token from main .env
+    main_env="$DISCORD_CONFIG_DIR/.env"
+    if [[ -f "$main_env" ]]; then
+      bot_token="$(grep '^DISCORD_BOT_TOKEN=' "$main_env" | cut -d= -f2-)"
+      cat > "$state_dir/.env" <<ENVFILE
+DISCORD_BOT_TOKEN=${bot_token}
+ENVFILE
+    fi
+
+    # Write per-instance access.json with only this channel
+    main_access="$DISCORD_CONFIG_DIR/access.json"
+    if [[ -f "$main_access" ]]; then
+      allow_from="$(jq -c '.allowFrom // []' "$main_access")"
+      dm_policy="$(jq -r '.dmPolicy // "pairing"' "$main_access")"
+    else
+      allow_from='[]'
+      dm_policy="pairing"
+    fi
+    cat > "$state_dir/access.json" <<ACCESSJSON
+{
+  "dmPolicy": "${dm_policy}",
+  "allowFrom": ${allow_from},
+  "groups": {
+    "${channel_id}": { "requireMention": false, "allowFrom": [] }
+  },
+  "pending": {}
+}
+ACCESSJSON
+    echo "[config] Written: $state_dir/access.json (channel ${channel_id})"
+
+    # Add to instances.json
+    if [[ "$FIRST_INSTANCE" == "true" ]]; then
+      FIRST_INSTANCE=false
+    else
+      INSTANCES_JSON+=','
+    fi
+    INSTANCES_JSON+="{\"name\":\"${instance_name}\",\"channel_id\":\"${channel_id}\",\"tmux_session\":\"${tmux_session}\"}"
+
+  done < "$INSTANCES_CONF"
+else
+  # No instances.conf: single-instance mode using standard Claude Channel config.
+  # Uses ~/.claude/channels/discord/ as-is (the default DISCORD_STATE_DIR).
+  # The bot reads channel ID from access.json or .env automatically.
+  MULTI_INSTANCE=false
+  LABEL_CHANNEL="com.devin.claude-channel"
+
+  echo "[instances] No instances.conf found, using single-instance mode"
+
+  # Stop existing channel service
+  if launchctl list "$LABEL_CHANNEL" &>/dev/null; then
+    launchctl bootout "gui/$(id -u)/$LABEL_CHANNEL" 2>/dev/null || true
+    echo "[launchd] Stopped: $LABEL_CHANNEL"
+  fi
+
+  # Generate single channel LaunchAgent (no INSTANCE_NAME -> defaults to ~/,
+  # tmux session "claude-channel", state dir ~/.claude/channels/discord/)
+  generate_plist "$LABEL_CHANNEL" \
+    "$SCRIPT_DIR/claude-channel/run-channel.sh" \
+    "claude-channel" \
+    "$USER_HOME/Library/LaunchAgents/$LABEL_CHANNEL.plist"
+
+  echo "[launchd] Generated: $LABEL_CHANNEL (default -> ~/)"
+fi
+
+INSTANCES_JSON+=']}'
+
+# Write instances.json for the bot to read (empty in single-instance mode,
+# bot falls back to reading channel ID from access.json/.env)
+mkdir -p "$DISCORD_CONFIG_DIR"
+echo "$INSTANCES_JSON" | python3 -m json.tool > "$DISCORD_CONFIG_DIR/instances.json" 2>/dev/null \
+  || echo "$INSTANCES_JSON" > "$DISCORD_CONFIG_DIR/instances.json"
+echo "[config] Written: $DISCORD_CONFIG_DIR/instances.json"
+
+# 7. Generate bot LaunchAgent
 generate_plist "$LABEL_BOT" "$SCRIPT_DIR/bot/run-bot.sh" "claude-bot" \
   "$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
-generate_plist "$LABEL_CHANNEL" "$SCRIPT_DIR/claude-channel/run-channel.sh" "claude-channel" \
-  "$USER_HOME/Library/LaunchAgents/$LABEL_CHANNEL.plist"
-echo "[launchd] Generated plist files"
+echo "[launchd] Generated: $LABEL_BOT"
 
-# 6. Install Claude Code SessionStart hook
+# 8. Install Claude Code SessionStart hook
 mkdir -p "$(dirname "$HOOK_DST")"
 ln -sf "$HOOK_SRC" "$HOOK_DST"
 echo "[hook] Linked: $HOOK_DST"
@@ -141,14 +267,38 @@ if [[ -f "$SETTINGS" ]]; then
   fi
 fi
 
-# 7. Load LaunchAgents
-for label in "$LABEL_CHANNEL" "$LABEL_BOT"; do
+# 9. Load all LaunchAgents
+# Load channel instances first
+if [[ "$MULTI_INSTANCE" == "true" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(echo "$line" | sed 's/#.*//' | xargs)"
+    [[ -z "$line" ]] && continue
+    instance_name="$(echo "$line" | awk '{print $1}')"
+    label="com.devin.claude-channel-${instance_name}"
+    plist="$USER_HOME/Library/LaunchAgents/$label.plist"
+    if launchctl list "$label" &>/dev/null; then
+      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+    fi
+    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
+    echo "[launchd] Loaded: $label"
+  done < "$INSTANCES_CONF"
+else
+  # Single-instance mode
+  label="com.devin.claude-channel"
   plist="$USER_HOME/Library/LaunchAgents/$label.plist"
   if launchctl list "$label" &>/dev/null; then
     launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   fi
   launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
   echo "[launchd] Loaded: $label"
-done
+fi
+
+# Load bot
+plist="$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
+if launchctl list "$LABEL_BOT" &>/dev/null; then
+  launchctl bootout "gui/$(id -u)/$LABEL_BOT" 2>/dev/null || true
+fi
+launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
+echo "[launchd] Loaded: $LABEL_BOT"
 
 echo "=== Install done ==="

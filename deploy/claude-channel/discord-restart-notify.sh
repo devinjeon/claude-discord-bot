@@ -3,7 +3,7 @@
 
 [ "$CLAUDE_DISCORD_SESSION" != "1" ] && exit 0
 
-CONFIG_DIR="$HOME/.claude/channels/discord"
+CONFIG_DIR="${DISCORD_STATE_DIR:-$HOME/.claude/channels/discord}"
 ENV_FILE="$CONFIG_DIR/.env"
 ACCESS_FILE="$CONFIG_DIR/access.json"
 

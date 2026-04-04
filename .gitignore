@@ -1,4 +1,4 @@
-claude-bot
+/claude-bot
 *.log
 .env
 channel.env
@@ -6,3 +6,4 @@ dist/
 coverage/
 deploy/env.generated.sh
 deploy/claude-channel/pre-run.sh
+deploy/instances.conf

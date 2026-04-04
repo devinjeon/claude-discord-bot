@@ -7,7 +7,16 @@ if [[ -f "$ENV_SNAPSHOT" ]]; then
     source "$ENV_SNAPSHOT"
 fi
 
-SESSION="claude-channel"
+# INSTANCE_NAME and WORKING_DIR can be set via environment (LaunchAgent plist)
+INSTANCE_NAME="${INSTANCE_NAME:-}"
+WORKING_DIR="${WORKING_DIR:-$HOME}"
+
+if [[ -n "$INSTANCE_NAME" ]]; then
+    SESSION="claude-channel-${INSTANCE_NAME}"
+else
+    SESSION="claude-channel"
+fi
+
 TMUX="${INSTALL_TMUX:-$(command -v tmux)}"
 CLAUDE="${INSTALL_CLAUDE:-$(command -v claude)}"
 USER_SHELL="${INSTALL_SHELL:-zsh}"
@@ -33,14 +42,26 @@ if "$TMUX" has-session -t "$SESSION" 2>/dev/null; then
     "$TMUX" kill-session -t "$SESSION" 2>/dev/null
 fi
 
+# Expand ~ in WORKING_DIR
+WORKING_DIR="${WORKING_DIR/#\~/$HOME}"
+
+# Set per-instance Discord state dir so each instance has its own access.json
+if [[ -n "$INSTANCE_NAME" ]]; then
+    DISCORD_STATE_DIR="$HOME/.claude/channels/discord-${INSTANCE_NAME}"
+else
+    DISCORD_STATE_DIR="$HOME/.claude/channels/discord"
+fi
+
 # Start Claude in a new tmux session
 "$TMUX" new-session -d -s "$SESSION" \
     "/bin/$USER_SHELL -c '
 export HOME=$HOME
 export CLAUDE_DISCORD_SESSION=1
+export DISCORD_STATE_DIR=$DISCORD_STATE_DIR
 # Prevent tmux from blocking nested session creation when \$TMUX is already set
 unset TMUX
 [[ -f \"$SCRIPT_DIR/pre-run.sh\" ]] && source \"$SCRIPT_DIR/pre-run.sh\"
+cd \"$WORKING_DIR\" 2>/dev/null || true
 exec $CLAUDE --channels $CLAUDE_CHANNELS $CLAUDE_FLAGS $CLAUDE_EXTRA_ARGS
 '"
 
