@@ -3,7 +3,7 @@ BUILD_DIR := ./cmd/claude-bot
 COVERAGE_DIR := ./coverage
 COVERAGE_FILE := $(COVERAGE_DIR)/coverage.out
 
-.PHONY: build run clean install uninstall test test-verbose coverage coverage-html vet lint check
+.PHONY: build run clean install add-channel uninstall test test-verbose coverage coverage-html vet lint check
 
 build:
 	go build -o $(BINARY) $(BUILD_DIR)
@@ -17,6 +17,9 @@ clean:
 
 install:
 	bash deploy/install.sh
+
+add-channel:
+	bash deploy/install.sh --no-build
 
 uninstall:
 	bash deploy/uninstall.sh

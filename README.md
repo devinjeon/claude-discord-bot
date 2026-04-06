@@ -140,7 +140,9 @@ Each instance gets its own tmux session (`claude-channel-<name>`), LaunchAgent, 
 1. Create a text channel in your Discord server
 2. Copy the channel ID (right-click the channel, "Copy Channel ID")
 3. Add a line to `deploy/instances.conf`
-4. Run `make install`
+4. Run `make add-channel`
+
+This skips the Go build step and only restarts the bot (to pick up the new channel routing) and the new channel service. Existing channel sessions are not affected. Use `make install` instead if you also need to rebuild the bot binary after code changes.
 
 The install script automatically creates the per-instance `access.json` and `.env` files. No manual Discord pairing is needed for new channels -- the bot token is shared from the original pairing.
 
