@@ -90,8 +90,43 @@ case "$ACTION" in
     sed -i '' "/^${NAME}[[:space:]]/d" "$INSTANCES_CONF"
     echo "[config] Removed '${NAME}' from instances.conf"
 
-    # 6. Rebuild instances.json and restart bot (to drop the removed channel)
-    bash "$SCRIPT_DIR/install.sh" --no-build
+    # 6. Rebuild instances.json and signal bot to reload (no restart)
+    INSTANCES_JSON='{"instances":['
+    FIRST=true
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="$(echo "$line" | sed 's/#.*//' | xargs)"
+      [[ -z "$line" ]] && continue
+      inst_name="$(echo "$line" | awk '{print $1}')"
+      ch_id="$(echo "$line" | awk '{print $2}')"
+      tmux_sess="claude-channel-${inst_name}"
+      if [[ "$FIRST" == "true" ]]; then
+        FIRST=false
+      else
+        INSTANCES_JSON+=','
+      fi
+      INSTANCES_JSON+="{\"name\":\"${inst_name}\",\"channel_id\":\"${ch_id}\",\"tmux_session\":\"${tmux_sess}\"}"
+    done < "$INSTANCES_CONF"
+    INSTANCES_JSON+=']}'
+
+    INSTANCES_JSON_FILE="$DISCORD_CONFIG_DIR/instances.json"
+    mkdir -p "$DISCORD_CONFIG_DIR"
+    echo "$INSTANCES_JSON" | python3 -m json.tool > "$INSTANCES_JSON_FILE" 2>/dev/null \
+      || echo "$INSTANCES_JSON" > "$INSTANCES_JSON_FILE"
+    echo "[config] Updated instances.json"
+
+    # Send SIGHUP to bot for hot-reload (no restart needed)
+    BOT_LABEL="com.devin.claude-bot"
+    BOT_PID=$(launchctl list "$BOT_LABEL" 2>/dev/null | awk 'NR==1{print $1}')
+    # launchctl list <label> outputs: PID Status Label — first field is PID (or "-" if not running)
+    if [[ "$BOT_PID" == "-" || -z "$BOT_PID" ]]; then
+      BOT_PID=$(pgrep -x "claude-bot" 2>/dev/null | head -1)
+    fi
+    if [[ -n "$BOT_PID" ]]; then
+      kill -HUP "$BOT_PID" 2>/dev/null && echo "[bot] Sent SIGHUP to bot (PID $BOT_PID) for hot-reload" \
+        || echo "[bot] Failed to send SIGHUP to bot"
+    else
+      echo "[bot] Bot process not found — will pick up changes on next start"
+    fi
 
     echo "=== Channel '${NAME}' removed ==="
     ;;

@@ -312,9 +312,10 @@ INSTANCES_JSON_MD5_BEFORE="$(file_md5 "$INSTANCES_JSON_FILE")"
 echo "$INSTANCES_JSON" | python3 -m json.tool > "$INSTANCES_JSON_FILE" 2>/dev/null \
   || echo "$INSTANCES_JSON" > "$INSTANCES_JSON_FILE"
 INSTANCES_JSON_MD5_AFTER="$(file_md5 "$INSTANCES_JSON_FILE")"
+RELOAD_BOT=false
 if [[ "$INSTANCES_JSON_MD5_BEFORE" != "$INSTANCES_JSON_MD5_AFTER" ]]; then
-  echo "[config] instances.json changed — bot restart needed"
-  RESTART_BOT=true
+  echo "[config] instances.json changed — bot reload needed"
+  RELOAD_BOT=true
 else
   echo "[config] instances.json unchanged"
 fi
@@ -423,12 +424,26 @@ else
   fi
 fi
 
-# Restart bot
+# Restart or reload bot
 BOT_PLIST_PATH="$USER_HOME/Library/LaunchAgents/$LABEL_BOT.plist"
 if [[ "$RESTART_BOT" == "true" ]]; then
   restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
 elif ! launchctl list "$LABEL_BOT" &>/dev/null; then
   restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
+elif [[ "$RELOAD_BOT" == "true" ]]; then
+  # instances.json changed but nothing else — hot-reload via SIGHUP
+  BOT_PID=$(launchctl list "$LABEL_BOT" 2>/dev/null | awk 'NR==1{print $1}')
+  if [[ -n "$BOT_PID" && "$BOT_PID" != "-" ]]; then
+    if kill -HUP "$BOT_PID" 2>/dev/null; then
+      echo "[launchd] Sent SIGHUP to bot (PID $BOT_PID) for hot-reload"
+    else
+      echo "[launchd] Failed to send SIGHUP, restarting bot instead"
+      restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
+    fi
+  else
+    echo "[launchd] Bot not running, starting"
+    restart_service "$LABEL_BOT" "$BOT_PLIST_PATH"
+  fi
 else
   echo "[launchd] No change: $LABEL_BOT"
 fi
