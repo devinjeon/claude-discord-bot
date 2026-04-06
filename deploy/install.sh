@@ -12,9 +12,13 @@ SETTINGS="$HOME/.claude/settings.json"
 DISCORD_CONFIG_DIR="$HOME/.claude/channels/discord"
 
 FORCE_RESTART=false
-if [[ "${1:-}" == "--force" ]]; then
-  FORCE_RESTART=true
-fi
+SKIP_BUILD=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE_RESTART=true ;;
+    --no-build) SKIP_BUILD=true ;;
+  esac
+done
 
 echo "=== claude-discord-bot install ==="
 
@@ -64,21 +68,25 @@ echo "[env] SHELL=$USER_SHELL"
 echo "[env] tmux=$TMUX_PATH"
 echo "[env] claude=$CLAUDE_PATH"
 
-# 1. Build
-echo "[build] Building claude-bot..."
+# 1. Build (skip with --no-build for channel-only changes)
 cd "$PROJECT_DIR"
-if ! command -v go &>/dev/null; then
-  echo "[error] go not found in PATH. Install Go first." >&2
-  exit 1
-fi
-BINARY_MD5_BEFORE="$(file_md5 "$PROJECT_DIR/claude-bot")"
-go build -o claude-bot ./cmd/claude-bot
-BINARY_MD5_AFTER="$(file_md5 "$PROJECT_DIR/claude-bot")"
-if [[ "$BINARY_MD5_BEFORE" != "$BINARY_MD5_AFTER" ]]; then
-  echo "[build] Binary changed"
-  RESTART_BOT=true
+if [[ "$SKIP_BUILD" == "true" ]]; then
+  echo "[build] Skipped (--no-build)"
 else
-  echo "[build] Binary unchanged"
+  echo "[build] Building claude-bot..."
+  if ! command -v go &>/dev/null; then
+    echo "[error] go not found in PATH. Install Go first." >&2
+    exit 1
+  fi
+  BINARY_MD5_BEFORE="$(file_md5 "$PROJECT_DIR/claude-bot")"
+  go build -o claude-bot ./cmd/claude-bot
+  BINARY_MD5_AFTER="$(file_md5 "$PROJECT_DIR/claude-bot")"
+  if [[ "$BINARY_MD5_BEFORE" != "$BINARY_MD5_AFTER" ]]; then
+    echo "[build] Binary changed"
+    RESTART_BOT=true
+  else
+    echo "[build] Binary unchanged"
+  fi
 fi
 
 # 3. Set script permissions
@@ -299,9 +307,17 @@ INSTANCES_JSON+=']}'
 # Write instances.json for the bot to read (empty in single-instance mode,
 # bot falls back to reading channel ID from access.json/.env)
 mkdir -p "$DISCORD_CONFIG_DIR"
-echo "$INSTANCES_JSON" | python3 -m json.tool > "$DISCORD_CONFIG_DIR/instances.json" 2>/dev/null \
-  || echo "$INSTANCES_JSON" > "$DISCORD_CONFIG_DIR/instances.json"
-echo "[config] Written: $DISCORD_CONFIG_DIR/instances.json"
+INSTANCES_JSON_FILE="$DISCORD_CONFIG_DIR/instances.json"
+INSTANCES_JSON_MD5_BEFORE="$(file_md5 "$INSTANCES_JSON_FILE")"
+echo "$INSTANCES_JSON" | python3 -m json.tool > "$INSTANCES_JSON_FILE" 2>/dev/null \
+  || echo "$INSTANCES_JSON" > "$INSTANCES_JSON_FILE"
+INSTANCES_JSON_MD5_AFTER="$(file_md5 "$INSTANCES_JSON_FILE")"
+if [[ "$INSTANCES_JSON_MD5_BEFORE" != "$INSTANCES_JSON_MD5_AFTER" ]]; then
+  echo "[config] instances.json changed — bot restart needed"
+  RESTART_BOT=true
+else
+  echo "[config] instances.json unchanged"
+fi
 
 # 7. Generate bot LaunchAgent
 #    Read optional bot.env for extra environment variables
