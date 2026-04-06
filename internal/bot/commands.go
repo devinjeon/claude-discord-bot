@@ -151,9 +151,8 @@ func (h *CommandHandler) HandleUsage(s *discordgo.Session) {
 	}
 	time.Sleep(100 * time.Millisecond)
 	h.Tmux.SendKeys("Enter")
-	time.Sleep(2 * time.Second)
 
-	output, err := h.Tmux.CapturePane()
+	output, err := h.waitForUsageOutput()
 	if err != nil {
 		s.ChannelMessageSend(h.ChannelID, fmt.Sprintf("tmux capture failed: %v", err))
 		return
@@ -225,9 +224,8 @@ func (h *CommandHandler) HandleUsageSlash(s *discordgo.Session, i *discordgo.Int
 	}
 	time.Sleep(100 * time.Millisecond)
 	h.Tmux.SendKeys("Enter")
-	time.Sleep(2 * time.Second)
 
-	output, err := h.Tmux.CapturePane()
+	output, err := h.waitForUsageOutput()
 	if err != nil {
 		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{Content: strPtr(fmt.Sprintf("Capture failed: %v", err))})
 		return
@@ -416,6 +414,28 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return "..." + s[len(s)-maxLen+3:]
+}
+
+// waitForUsageOutput polls tmux until usage data is loaded (contains "Current session")
+// or times out after 10 seconds.
+func (h *CommandHandler) waitForUsageOutput() (string, error) {
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 10 * time.Second
+	)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		output, err := h.Tmux.CapturePane()
+		if err != nil {
+			return "", err
+		}
+		if strings.Contains(output, "Current session") {
+			return output, nil
+		}
+	}
+	// Return whatever we have after timeout
+	return h.Tmux.CapturePane()
 }
 
 // extractUsageBlock extracts the usage info block from tmux output.
