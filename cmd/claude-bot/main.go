@@ -87,10 +87,35 @@ func main() {
 
 		done := make(chan struct{})
 		go func() {
-			sig := make(chan os.Signal, 1)
-			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-			<-sig
-			close(done)
+			termSig := make(chan os.Signal, 1)
+			signal.Notify(termSig, syscall.SIGINT, syscall.SIGTERM)
+
+			hupSig := make(chan os.Signal, 1)
+			signal.Notify(hupSig, syscall.SIGHUP)
+
+			for {
+				select {
+				case <-termSig:
+					close(done)
+					return
+				case <-hupSig:
+					log.Println("[reload] SIGHUP received, reloading instances.json")
+					newInstances := loadInstances(configDir)
+					var newConfigs []bot.InstanceConfig
+					for _, inst := range newInstances {
+						newConfigs = append(newConfigs, bot.InstanceConfig{
+							Name:      inst.Name,
+							ChannelID: inst.ChannelID,
+							Tmux: tmux.Config{
+								Path:    tmux.FindTmux(),
+								Session: inst.TmuxSession,
+								Timeout: 10 * time.Second,
+							},
+						})
+					}
+					b.Reload(newConfigs)
+				}
+			}
 		}()
 
 		if err := b.Run(done); err != nil {

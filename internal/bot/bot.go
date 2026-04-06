@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -31,12 +32,14 @@ type Instance struct {
 	State  *InteractionState
 	Cmd    *CommandHandler
 	Poller *Poller
+	cancel chan struct{} // per-instance cancel channel
 }
 
 // Bot is the main Discord bot instance.
 type Bot struct {
 	cfg       Config
 	session   *discordgo.Session
+	mu        sync.RWMutex
 	instances map[string]*Instance // channelID -> Instance
 }
 
@@ -54,25 +57,7 @@ func New(cfg Config) (*Bot, error) {
 	}
 
 	for _, ic := range cfg.Instances {
-		state := &InteractionState{}
-		cmd := &CommandHandler{
-			Tmux:      ic.Tmux,
-			ChannelID: ic.ChannelID,
-		}
-		poller := &Poller{
-			Session:   dg,
-			Tmux:      ic.Tmux,
-			State:     state,
-			ChannelID: ic.ChannelID,
-			Interval:  cfg.PollInterval,
-		}
-		b.instances[ic.ChannelID] = &Instance{
-			Config: ic,
-			State:  state,
-			Cmd:    cmd,
-			Poller: poller,
-		}
-		log.Printf("[init] instance %q -> channel %s -> tmux %s", ic.Name, ic.ChannelID, ic.Tmux.Session)
+		b.addInstance(ic, dg)
 	}
 
 	b.registerHandlers()
@@ -94,17 +79,105 @@ func (b *Bot) Run(done <-chan struct{}) error {
 
 	log.Printf("claude-bot running (%d instances)", len(b.instances))
 
+	b.mu.RLock()
 	for _, inst := range b.instances {
-		go inst.Poller.Run(done)
+		go inst.Poller.Run(inst.cancel)
 	}
+	b.mu.RUnlock()
 
 	<-done
 	log.Println("Shutting down")
+
+	// Stop all instance pollers
+	b.mu.RLock()
+	for _, inst := range b.instances {
+		select {
+		case <-inst.cancel:
+		default:
+			close(inst.cancel)
+		}
+	}
+	b.mu.RUnlock()
+
 	return nil
 }
 
 func (b *Bot) getInstance(channelID string) *Instance {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.instances[channelID]
+}
+
+// addInstance creates and registers a new instance (caller must not hold b.mu).
+func (b *Bot) addInstance(ic InstanceConfig, session *discordgo.Session) *Instance {
+	state := &InteractionState{}
+	cmd := &CommandHandler{
+		Tmux:      ic.Tmux,
+		ChannelID: ic.ChannelID,
+	}
+	cancel := make(chan struct{})
+	poller := &Poller{
+		Session:   session,
+		Tmux:      ic.Tmux,
+		State:     state,
+		ChannelID: ic.ChannelID,
+		Interval:  b.cfg.PollInterval,
+	}
+	inst := &Instance{
+		Config: ic,
+		State:  state,
+		Cmd:    cmd,
+		Poller: poller,
+		cancel: cancel,
+	}
+	b.instances[ic.ChannelID] = inst
+	log.Printf("[init] instance %q -> channel %s -> tmux %s", ic.Name, ic.ChannelID, ic.Tmux.Session)
+	return inst
+}
+
+// Reload re-reads instance configs and updates the instances map.
+// It stops pollers for removed instances and starts pollers for new ones.
+func (b *Bot) Reload(newConfigs []InstanceConfig) {
+	b.mu.Lock()
+
+	// Find removed instances
+	newSet := make(map[string]bool, len(newConfigs))
+	for _, ic := range newConfigs {
+		newSet[ic.ChannelID] = true
+	}
+
+	var toStop []*Instance
+	for chID, inst := range b.instances {
+		if !newSet[chID] {
+			toStop = append(toStop, inst)
+			delete(b.instances, chID)
+		}
+	}
+
+	// Find new instances
+	var toStart []*Instance
+	for _, ic := range newConfigs {
+		if _, exists := b.instances[ic.ChannelID]; !exists {
+			inst := b.addInstance(ic, b.session)
+			toStart = append(toStart, inst)
+		}
+	}
+
+	b.mu.Unlock()
+
+	// Stop removed instance pollers (outside lock)
+	for _, inst := range toStop {
+		log.Printf("[reload] removing instance %q (channel %s)", inst.Config.Name, inst.Config.ChannelID)
+		close(inst.cancel)
+	}
+
+	// Start new instance pollers
+	for _, inst := range toStart {
+		log.Printf("[reload] adding instance %q (channel %s)", inst.Config.Name, inst.Config.ChannelID)
+		go inst.Poller.Run(inst.cancel)
+	}
+
+	log.Printf("[reload] instances updated: %d active", len(b.instances))
 }
 
 func (b *Bot) registerHandlers() {
