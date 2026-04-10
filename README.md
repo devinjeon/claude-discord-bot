@@ -36,6 +36,19 @@ Multi-channel mode:
          claude-bot (1 process, routes by channel ID)
 ```
 
+### Comparison with official alternatives
+
+Anthropic offers other remote access options — [Remote Control](https://code.claude.com/docs/en/remote-control), [Dispatch](https://claude.com/blog/dispatch-and-computer-use), and [Cloud](https://code.claude.com/docs/en/claude-code-on-the-web). Remote Control provides a full web UI but has no messenger integration — you have to check it yourself to see if Claude needs input. claude-bot pushes notifications to Discord, so you only look when needed.
+
+| | claude-bot | Channels alone | Remote Control | Dispatch | Cloud |
+|---|---|---|---|---|---|
+| Notifies you when Claude needs input | Discord push | Discord push | No (must check manually) | Mobile app push | Mobile app push |
+| Remote restart | `/claude-restart` + LaunchAgent auto-recovery | Not possible | Not possible | Not possible | Cloud-managed |
+| Terminal visibility | `/claude-now`, screenshots | Not possible | Full web UI | Desktop UI | Web UI |
+| Failure recovery | LaunchAgent auto-restart | Manual | Manual | Manual | Cloud-managed |
+| Multi-project | Single config file (instances.conf) | Separate sessions manually | Separate processes or server mode | Parallel sessions from app | Multiple repos |
+| Prompt handling | In-channel emoji reactions (single tap) | DM buttons | Web/app UI | Mobile/Desktop app | Web UI |
+
 ## Discord commands
 
 | Command | What it does |
