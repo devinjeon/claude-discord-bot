@@ -3,7 +3,7 @@ BUILD_DIR := ./cmd/claude-bot
 COVERAGE_DIR := ./coverage
 COVERAGE_FILE := $(COVERAGE_DIR)/coverage.out
 
-.PHONY: build run clean install add-channel remove-channel uninstall test test-verbose coverage coverage-html vet lint check
+.PHONY: build run clean install add-channel remove-channel restart-channels uninstall test test-verbose coverage coverage-html vet lint check
 
 build:
 	go build -o $(BINARY) $(BUILD_DIR)
@@ -25,6 +25,9 @@ add-channel:
 remove-channel:
 	@test -n "$(NAME)" || { echo "Usage: make remove-channel NAME=<name>"; exit 1; }
 	bash deploy/manage-channel.sh remove "$(NAME)"
+
+restart-channels:
+	bash deploy/restart-channels.sh $(ARGS)
 
 uninstall:
 	bash deploy/uninstall.sh
