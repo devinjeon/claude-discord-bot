@@ -168,6 +168,19 @@ make remove-channel NAME=my-project
 
 This stops the channel's LaunchAgent, kills its tmux session, removes the plist and per-instance state directory, removes the entry from `instances.conf`, and restarts the bot.
 
+#### Restarting channels
+
+```bash
+make restart-channels
+```
+
+This restarts every channel instance's LaunchAgent (each relaunch kills the old tmux session and starts a fresh one). The bot is left untouched. Optional arguments:
+
+```bash
+make restart-channels ARGS=--with-bot          # also restart the bot
+make restart-channels ARGS=--only=my-project   # restart a single instance
+```
+
 The install script automatically creates the per-instance `access.json` and `.env` files. No manual Discord pairing is needed for new channels -- the bot token is shared from the original pairing.
 
 If `instances.conf` is absent, the bot falls back to single-channel mode using the original pairing config.
